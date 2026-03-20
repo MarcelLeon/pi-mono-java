@@ -1,0 +1,9 @@
+pi:
+  session:
+    dir: .pi/sessions
+  llm:
+    default-model: mock-claude
+
+spring:
+  application:
+    name: my-pi-app

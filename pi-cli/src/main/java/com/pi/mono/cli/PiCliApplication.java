@@ -50,16 +50,33 @@ public class PiCliApplication implements CommandLineRunner {
         System.out.println("✅ Created session: " + sessionId);
 
         // 主循环
-        while (true) {
-            System.out.print("pi> ");
-            String input = scanner.nextLine().trim();
+        handleCommandLine();
+    }
 
-            if (input.equalsIgnoreCase("exit")) {
-                System.out.println("👋 Goodbye!");
-                break;
+    private void handleCommandLine() {
+        try {
+            while (true) {
+                System.out.print("pi> ");
+                if (scanner.hasNextLine()) {
+                    String input = scanner.nextLine().trim();
+
+                    if (input.equalsIgnoreCase("exit")) {
+                        System.out.println("👋 Goodbye!");
+                        break;
+                    }
+
+                    handleCommand(input);
+                } else {
+                    // 如果没有更多输入，退出循环
+                    System.out.println("👋 Goodbye!");
+                    break;
+                }
             }
-
-            handleCommand(input);
+        } catch (Exception e) {
+            System.err.println("❌ Application error: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            scanner.close();
         }
     }
 

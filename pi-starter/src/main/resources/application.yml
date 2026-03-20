@@ -1,0 +1,29 @@
+# Pi-Mono Java 配置示例
+
+# 默认LLM模型
+pi.mono.default-model=mock-claude
+
+# 会话配置
+pi.mono.session.timeout=24h
+pi.mono.session.max-sessions=1000
+pi.mono.session.storage-path=./pi-sessions
+
+# LLM提供商配置
+pi.mono.providers.mock-claude.type=mock
+pi.mono.providers.mock-claude.model=mock-claude
+pi.mono.providers.mock-claude.timeout=5m
+
+# 工具配置
+pi.mono.tools.enabled=true
+pi.mono.tools.timeout=10m
+pi.mono.tools.max-file-size=10485760  # 10MB
+
+# Web API配置
+pi.mono.web.enabled=true
+pi.mono.web.path-prefix=/api/pi
+pi.mono.web.websocket-enabled=true
+pi.mono.web.websocket-path=/ws/pi
+
+# 日志配置
+logging.level.com.pi.mono=INFO
+logging.level.org.springframework.web=DEBUG

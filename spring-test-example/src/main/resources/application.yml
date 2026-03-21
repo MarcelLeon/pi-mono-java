@@ -1,0 +1,33 @@
+# Pi-Mono Java 配置
+pi:
+  session:
+    dir: .pi/sessions  # 会话存储目录
+  llm:
+    default-model: mock-claude  # 默认模型
+    openai:
+      enabled: true
+      api-key: sk-your-api-key-here
+      model: gpt-3.5-turbo
+      timeout: 30s
+      max-retries: 3
+  tools:
+    permissions:
+      read: ["read"]      # 读取文件权限
+      write: ["write"]    # 写入文件权限
+      bash: ["system"]    # Bash命令权限
+      edit: ["write"]     # 编辑文件权限
+
+# Spring配置
+spring:
+  application:
+    name: spring-pi-mono-test
+  main:
+    web-application-type: none
+  profiles:
+    active: dev
+
+# 日志配置
+logging:
+  level:
+    com.pi.mono: DEBUG
+    org.springframework: INFO

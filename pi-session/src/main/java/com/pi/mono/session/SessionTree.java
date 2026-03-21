@@ -80,7 +80,11 @@ public class SessionTree {
 
         while (current != null) {
             path.add(0, current);
-            current = nodes.get(current.parentId());
+            String parentId = current.parentId();
+            if (parentId == null) {
+                break;
+            }
+            current = nodes.get(parentId);
         }
 
         return path;

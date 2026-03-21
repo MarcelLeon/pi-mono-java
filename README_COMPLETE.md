@@ -224,8 +224,8 @@ mvn clean install
 # 运行测试
 mvn test
 
-# 验证系统
-./verify_complete_system.sh
+# 统一冒烟验收（含日志与报告）
+./scripts/benchmark_smoke.sh
 ```
 
 ### 📁 重要文件

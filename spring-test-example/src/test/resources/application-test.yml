@@ -1,0 +1,10 @@
+pi:
+  session:
+    dir: target/test-sessions
+  llm:
+    openai:
+      enabled: false
+
+spring:
+  main:
+    web-application-type: none

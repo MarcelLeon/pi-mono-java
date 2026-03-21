@@ -1,1 +1,0 @@
-./test-e2e.sh: line 20: timeout: command not found

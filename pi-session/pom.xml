@@ -23,6 +23,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- LLM manager -->
+        <dependency>
+            <groupId>com.pi.mono</groupId>
+            <artifactId>pi-llm</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Caffeine for caching -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>

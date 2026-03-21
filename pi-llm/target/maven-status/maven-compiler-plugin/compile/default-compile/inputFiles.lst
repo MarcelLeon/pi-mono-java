@@ -1,5 +1,0 @@
-/Users/wangzq/VsCodeProjects/pi-mono-java/pi-llm/src/main/java/com/pi/mono/llm/LLMProviderManager.java
-/Users/wangzq/VsCodeProjects/pi-mono-java/pi-llm/src/main/java/com/pi/mono/llm/client/OpenAIClient.java
-/Users/wangzq/VsCodeProjects/pi-mono-java/pi-llm/src/main/java/com/pi/mono/llm/config/OpenAIConfig.java
-/Users/wangzq/VsCodeProjects/pi-mono-java/pi-llm/src/main/java/com/pi/mono/llm/mock/MockLLMProvider.java
-/Users/wangzq/VsCodeProjects/pi-mono-java/pi-llm/src/main/java/com/pi/mono/llm/provider/OpenAILLMProvider.java

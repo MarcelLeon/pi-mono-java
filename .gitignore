@@ -1,0 +1,24 @@
+# Maven/Java build outputs
+**/target/
+*.class
+
+# Test and benchmark logs
+*.log
+benchmarks/logs/
+
+# Local runtime data
+.pi/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Temporary outputs from local scripts
+test-cli-output/
+test_final_output/
+cli_test_output.txt
+compile_test.txt
+spring_compile.txt
+spring_test_output.txt

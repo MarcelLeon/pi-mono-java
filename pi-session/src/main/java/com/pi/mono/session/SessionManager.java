@@ -9,8 +9,12 @@ import org.springframework.beans.factory.annotation.Value;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.Optional;
+import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 会话管理器
@@ -32,15 +36,36 @@ public class SessionManager {
 
     private String currentSessionId;
     private final Map<String, String> sessionModelMap = new ConcurrentHashMap<>();
+    private final List<SessionEventListener> sessionEventListeners = new CopyOnWriteArrayList<>();
 
     public String createSession(String model) {
-        String sessionId = UUID.randomUUID().toString();
+        return createSession(model, Map.of());
+    }
+
+    public String createSession(String model, Map<String, Object> metadata) {
+        return createSessionInternal(UUID.randomUUID().toString(), model, metadata);
+    }
+
+    public String createSessionWithId(String sessionId, String model, Map<String, ?> metadata) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("Session id must not be blank");
+        }
+        return createSessionInternal(sessionId.trim(), model, metadata);
+    }
+
+    private String createSessionInternal(String sessionId, String model, Map<String, ?> metadata) {
         String resolvedModel = (model == null || model.isBlank()) ? defaultModel : model;
+        Map<String, Object> rootMetadata = new HashMap<>();
+        rootMetadata.put("model", resolvedModel);
+        rootMetadata.put("timestamp", System.currentTimeMillis());
+        if (metadata != null) {
+            rootMetadata.putAll(metadata);
+        }
 
         AgentMessage systemMessage = new AgentMessage(
             MessageRole.SYSTEM,
             "Session created with model: " + resolvedModel,
-            Map.of("model", resolvedModel, "timestamp", System.currentTimeMillis())
+            rootMetadata
         );
 
         sessionTree.createRoot(sessionId, systemMessage);
@@ -55,11 +80,9 @@ public class SessionManager {
             throw new IllegalStateException("Session not found: " + sessionId);
         }
 
-        // 加载会话到内存
-        // 注意：这里需要重新构建SessionTree，因为它是组件
-        // 暂时创建新会话作为占位符
+        sessionTree = sessionPersistence.loadSessionTree(sessionId);
         currentSessionId = sessionId;
-        sessionModelMap.putIfAbsent(sessionId, defaultModel);
+        sessionModelMap.put(sessionId, readModelFromRoot(sessionTree));
         return sessionId;
     }
 
@@ -140,6 +163,95 @@ public class SessionManager {
         return sessionTree.getBranchPath(sessionTree.getCurrentBranchId());
     }
 
+    public String forkCurrentSessionFromNode(String nodeId, String model) {
+        if (currentSessionId == null) {
+            throw new IllegalStateException("No active session to fork");
+        }
+
+        List<SessionNode> path = sessionTree.getBranchPath(nodeId);
+        if (path.isEmpty()) {
+            throw new IllegalStateException("Node not found: " + nodeId);
+        }
+
+        String forkedSessionId = UUID.randomUUID().toString();
+        SessionTree forkedTree = new SessionTree();
+        forkedTree.restore(copyPath(path, model), nodeId);
+        sessionPersistence.saveSessionTree(forkedSessionId, forkedTree);
+        sessionModelMap.put(forkedSessionId, model == null || model.isBlank() ? readModelFromRoot(forkedTree) : model);
+        return forkedSessionId;
+    }
+
+    public Path exportSession(Path destination) {
+        if (currentSessionId == null) {
+            throw new IllegalStateException("No active session to export");
+        }
+        return sessionPersistence.exportSession(currentSessionId, destination);
+    }
+
+    public String importSession(Path source) {
+        String sessionId = sessionPersistence.importSession(source);
+        loadSession(sessionId);
+        return sessionId;
+    }
+
+    public void addSessionEventListener(SessionEventListener listener) {
+        if (listener != null) {
+            sessionEventListeners.add(listener);
+        }
+    }
+
+    public void removeSessionEventListener(SessionEventListener listener) {
+        sessionEventListeners.remove(listener);
+    }
+
+    public String renameCurrentSession(String sessionName) {
+        if (currentSessionId == null) {
+            throw new IllegalStateException("No active session to rename");
+        }
+
+        String normalizedName = normalizeSessionName(sessionName);
+        if (normalizedName.isBlank()) {
+            throw new IllegalArgumentException("Session name must not be blank");
+        }
+
+        SessionNode rootNode = sessionTree.getNode(sessionTree.getRootId())
+            .orElseThrow(() -> new IllegalStateException("Current session does not have a root node"));
+        AgentMessage rootMessage = rootNode.message();
+        Map<String, Object> metadata = new HashMap<>(rootMessage.metadata());
+        metadata.put("sessionName", normalizedName);
+        metadata.put("sessionNameUpdatedAt", System.currentTimeMillis());
+
+        sessionTree.updateNodeMessage(rootNode.id(), new AgentMessage(
+            rootMessage.role(),
+            rootMessage.content(),
+            metadata
+        ));
+
+        publishSessionInfoChanged(normalizedName, metadata);
+        return normalizedName;
+    }
+
+    public Optional<String> getCurrentSessionName() {
+        if (currentSessionId == null) {
+            return Optional.empty();
+        }
+
+        return sessionTree.getNode(sessionTree.getRootId())
+            .map(SessionNode::message)
+            .map(AgentMessage::metadata)
+            .map(metadata -> metadata.get("sessionName"))
+            .map(String::valueOf)
+            .filter(name -> !name.isBlank());
+    }
+
+    public String getCurrentBranchId() {
+        return sessionTree.getCurrentBranchId();
+    }
+
+    public List<SessionNode> getAllNodes() {
+        return List.copyOf(sessionTree.getAllNodes());
+    }
+
     public void saveSession() {
         if (currentSessionId == null) {
             throw new IllegalStateException("No active session to save");
@@ -158,5 +270,60 @@ public class SessionManager {
 
     public void clearCurrentSession() {
         currentSessionId = null;
+    }
+
+    private List<SessionNode> copyPath(List<SessionNode> path, String model) {
+        return path.stream()
+            .map(node -> copyNode(node, model))
+            .toList();
+    }
+
+    private SessionNode copyNode(SessionNode node, String model) {
+        AgentMessage message = node.message();
+        Map<String, Object> messageMetadata = new HashMap<>(message.metadata());
+        if (node.parentId() == null && model != null && !model.isBlank()) {
+            messageMetadata.put("model", model);
+        }
+
+        return new SessionNode(
+            node.id(),
+            node.parentId(),
+            new AgentMessage(message.role(), message.content(), messageMetadata),
+            node.timestamp(),
+            new HashMap<>(node.metadata()),
+            node.tokenUsage(),
+            node.version(),
+            node.snapshotId()
+        );
+    }
+
+    private String readModelFromRoot(SessionTree tree) {
+        return tree.getNode(tree.getRootId())
+            .map(SessionNode::message)
+            .map(AgentMessage::metadata)
+            .map(metadata -> metadata.getOrDefault("model", defaultModel))
+            .map(String::valueOf)
+            .orElse(defaultModel);
+    }
+
+    private String normalizeSessionName(String sessionName) {
+        if (sessionName == null) {
+            return "";
+        }
+        return sessionName.replace('\r', ' ')
+            .replace('\n', ' ')
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private void publishSessionInfoChanged(String sessionName, Map<String, Object> metadata) {
+        SessionInfoChangedEvent event = new SessionInfoChangedEvent(
+            "session_info_changed",
+            currentSessionId,
+            sessionTree.getRootId(),
+            sessionName,
+            metadata
+        );
+        sessionEventListeners.forEach(listener -> listener.onSessionInfoChanged(event));
     }
 }

@@ -1,8 +1,10 @@
 package com.pi.mono.session;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.pi.mono.core.SessionNode;
 import com.pi.mono.core.AgentMessage;
+import com.pi.mono.core.MessageRole;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -10,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Stream;
 
@@ -35,6 +38,7 @@ public class SessionPersistence {
         try {
             Path sessionFile = getSessionFilePath(sessionId);
             Files.createDirectories(sessionFile.getParent());
+            validateExistingSessionFileBeforeOverwrite(sessionId, sessionFile);
 
             // 转换为可序列化的版本
             SerializableSessionTree serializableTree = new SerializableSessionTree(sessionTree);
@@ -56,9 +60,26 @@ public class SessionPersistence {
             }
 
         } catch (Exception e) {
-            System.err.println("保存会话失败: " + e.getMessage());
-            e.printStackTrace();
             throw new RuntimeException("Failed to save session: " + sessionId, e);
+        }
+    }
+
+    private void validateExistingSessionFileBeforeOverwrite(String sessionId, Path sessionFile) throws Exception {
+        if (!Files.exists(sessionFile) || Files.size(sessionFile) == 0) {
+            return;
+        }
+
+        try {
+            for (String line : Files.readAllLines(sessionFile)) {
+                if (!line.isBlank()) {
+                    deserializeSessionNode(line);
+                }
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "Refusing to overwrite invalid non-empty session file: " + sessionId,
+                e
+            );
         }
     }
 
@@ -69,11 +90,16 @@ public class SessionPersistence {
                 return new SessionTree(); // 返回空的会话树
             }
 
-            // 从文件重建SessionTree
-            // 由于SessionTree是@Component，我们创建一个新的实例
-            // 这里需要更复杂的逻辑来重建树结构
-            // 暂时返回空树，后续优化
-            return new SessionTree();
+            List<SessionNode> nodes = new ArrayList<>();
+            for (String line : Files.readAllLines(sessionFile)) {
+                if (!line.isBlank()) {
+                    nodes.add(deserializeSessionNode(line));
+                }
+            }
+
+            SessionTree restoredTree = new SessionTree();
+            restoredTree.restore(nodes, null);
+            return restoredTree;
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to load session: " + sessionId, e);
@@ -112,6 +138,112 @@ public class SessionPersistence {
 
     private Path getSessionFilePath(String sessionId) {
         return Paths.get(sessionDir, sessionId + ".jsonl");
+    }
+
+    public Path exportSession(String sessionId, Path destination) {
+        try {
+            Path sessionFile = getSessionFilePath(sessionId);
+            if (!Files.exists(sessionFile)) {
+                throw new IllegalStateException("Session not found: " + sessionId);
+            }
+            if (destination.getParent() != null) {
+                Files.createDirectories(destination.getParent());
+            }
+            return Files.copy(sessionFile, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to export session: " + sessionId, e);
+        }
+    }
+
+    public String importSession(Path source) {
+        try {
+            if (!Files.exists(source)) {
+                throw new IllegalStateException("Import file not found: " + source);
+            }
+
+            String sessionId = source.getFileName().toString();
+            if (sessionId.endsWith(".jsonl")) {
+                sessionId = sessionId.substring(0, sessionId.length() - ".jsonl".length());
+            }
+            if (sessionId.isBlank()) {
+                sessionId = UUID.randomUUID().toString();
+            }
+
+            Path sessionFile = getSessionFilePath(sessionId);
+            Files.createDirectories(sessionFile.getParent());
+            Files.copy(source, sessionFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            loadSessionTree(sessionId);
+            return sessionId;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to import session: " + source, e);
+        }
+    }
+
+    private SessionNode deserializeSessionNode(String jsonLine) throws Exception {
+        JsonNode node = objectMapper.readTree(jsonLine);
+        JsonNode messageNode = node.get("message");
+
+        AgentMessage message = new AgentMessage(
+            MessageRole.valueOf(messageNode.get("role").asText()),
+            messageNode.get("content").asText(),
+            readMetadata(messageNode.get("metadata"))
+        );
+
+        JsonNode snapshotNode = node.get("snapshotId");
+        Optional<String> snapshotId = snapshotNode == null || snapshotNode.isNull()
+            ? Optional.empty()
+            : Optional.of(snapshotNode.asText());
+
+        return new SessionNode(
+            node.get("id").asText(),
+            readNullableText(node.get("parentId")),
+            message,
+            LocalDateTime.parse(node.get("timestamp").asText()),
+            readMetadata(node.get("metadata")),
+            node.get("tokenUsage").asInt(),
+            node.get("version").asInt(),
+            snapshotId
+        );
+    }
+
+    private Map<String, Object> readMetadata(JsonNode metadataNode) {
+        if (metadataNode == null || metadataNode.isNull() || metadataNode.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadataNode.fields().forEachRemaining(entry -> metadata.put(entry.getKey(), readJsonValue(entry.getValue())));
+        return metadata;
+    }
+
+    private Object readJsonValue(JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isObject()) {
+            Map<String, Object> nested = new HashMap<>();
+            value.fields().forEachRemaining(entry -> nested.put(entry.getKey(), readJsonValue(entry.getValue())));
+            return nested;
+        }
+        if (value.isArray()) {
+            List<Object> items = new ArrayList<>();
+            value.elements().forEachRemaining(element -> items.add(readJsonValue(element)));
+            return items;
+        }
+        if (value.isBoolean()) {
+            return value.asBoolean();
+        }
+        if (value.isIntegralNumber()) {
+            return value.asLong();
+        }
+        if (value.isFloatingPointNumber()) {
+            return value.asDouble();
+        }
+        return value.asText();
+    }
+
+    private String readNullableText(JsonNode node) {
+        return node == null || node.isNull() ? null : node.asText();
     }
 
     /**
@@ -164,34 +296,11 @@ public class SessionPersistence {
         if (metadata == null || metadata.isEmpty()) {
             return "{}";
         }
-
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : metadata.entrySet()) {
-            if (!first) {
-                json.append(",");
-            }
-            json.append("\"").append(escapeJsonString(entry.getKey())).append("\":");
-
-            // 处理不同的对象类型
-            Object value = entry.getValue();
-            if (value instanceof String) {
-                json.append(escapeJsonString((String) value));
-            } else if (value instanceof Number) {
-                json.append(value);
-            } else if (value instanceof Boolean) {
-                json.append(value);
-            } else {
-                // 其他类型转换为字符串
-                json.append(escapeJsonString(String.valueOf(value)));
-            }
-            first = false;
+        try {
+            return objectMapper.writeValueAsString(metadata);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to serialize metadata", e);
         }
-
-        json.append("}");
-        return json.toString();
     }
 
     /**

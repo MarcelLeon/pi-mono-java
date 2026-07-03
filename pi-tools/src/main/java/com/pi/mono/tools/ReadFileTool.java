@@ -1,12 +1,16 @@
 package com.pi.mono.tools;
 
 import org.springframework.stereotype.Component;
-import org.springframework.core.io.FileSystemResource;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.HashMap;
@@ -67,6 +71,10 @@ public class ReadFileTool implements ToolDefinition {
                     return ToolExecutionResult.failure("File is too large to read: " + fileSize + " bytes");
                 }
 
+                if (isBmpFile(path)) {
+                    return readBmpAsPngDataUrl(path, pathStr, fileSize);
+                }
+
                 StringBuilder content = new StringBuilder();
                 content.append("File: ").append(pathStr).append("\n");
                 content.append("Size: ").append(fileSize).append(" bytes\n");
@@ -89,5 +97,47 @@ public class ReadFileTool implements ToolDefinition {
                 return ToolExecutionResult.failure("Unexpected error: " + e.getMessage());
             }
         });
+    }
+
+    private boolean isBmpFile(Path path) throws IOException {
+        String fileName = path.getFileName().toString().toLowerCase();
+        if (fileName.endsWith(".bmp")) {
+            return true;
+        }
+
+        try (InputStream inputStream = Files.newInputStream(path)) {
+            byte[] header = inputStream.readNBytes(2);
+            return header.length == 2 && header[0] == 'B' && header[1] == 'M';
+        }
+    }
+
+    private ToolExecutionResult readBmpAsPngDataUrl(Path path, String pathStr, long fileSize) throws IOException {
+        BufferedImage image = ImageIO.read(path.toFile());
+        if (image == null) {
+            return ToolExecutionResult.failure("Failed to decode BMP image: " + pathStr);
+        }
+
+        ByteArrayOutputStream pngBytes = new ByteArrayOutputStream();
+        if (!ImageIO.write(image, "png", pngBytes)) {
+            return ToolExecutionResult.failure("Failed to convert BMP image to PNG: " + pathStr);
+        }
+
+        String dataUrl = "data:image/png;base64," + Base64.getEncoder().encodeToString(pngBytes.toByteArray());
+        StringBuilder content = new StringBuilder();
+        content.append("File: ").append(pathStr).append("\n");
+        content.append("Size: ").append(fileSize).append(" bytes\n");
+        content.append("Content-Type: image/png\n");
+        content.append("Source-Format: bmp\n");
+        content.append("Content:\n");
+        content.append(dataUrl).append("\n");
+
+        return ToolExecutionResult.success(content.toString(), Map.of(
+            "contentType", "image",
+            "mimeType", "image/png",
+            "sourceFormat", "bmp",
+            "convertedFormat", "png",
+            "originalSizeBytes", fileSize,
+            "convertedSizeBytes", pngBytes.size()
+        ));
     }
 }

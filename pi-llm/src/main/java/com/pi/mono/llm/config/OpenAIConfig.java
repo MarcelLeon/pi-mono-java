@@ -28,10 +28,9 @@ public class OpenAIConfig {
 
     /**
      * 默认使用的模型
-     * 可选值: gpt-3.5-turbo, gpt-4, gpt-4-turbo
-     * 默认: gpt-3.5-turbo
+     * 默认跟随 upstream Pi v0.80.3 的 OpenAI 默认模型。
      */
-    private String model = "gpt-3.5-turbo";
+    private String model = "gpt-5.5";
 
     /**
      * API请求超时时间
@@ -131,6 +130,33 @@ public class OpenAIConfig {
      * 获取完整的API URL
      */
     public String getApiUrl() {
-        return baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
+        return getResolvedBaseUrl() + getChatCompletionsPath();
+    }
+
+    public String getResolvedBaseUrl() {
+        String normalized = trimTrailingSlash(baseUrl == null || baseUrl.isBlank()
+            ? "https://api.openai.com/v1"
+            : baseUrl.trim());
+
+        if (isAzureOpenAiHost(normalized) && !normalized.contains("/openai/")) {
+            return normalized + "/openai/v1";
+        }
+        return normalized;
+    }
+
+    public String getChatCompletionsPath() {
+        return "/chat/completions";
+    }
+
+    private boolean isAzureOpenAiHost(String url) {
+        return url.contains(".openai.azure.com") || url.contains(".services.ai.azure.com");
+    }
+
+    private String trimTrailingSlash(String value) {
+        String normalized = value;
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 }

@@ -120,4 +120,65 @@ public class SessionTree {
     public List<String> getChildren(String parentId) {
         return children.getOrDefault(parentId, Collections.emptyList());
     }
+
+    public Optional<SessionNode> getNode(String nodeId) {
+        return Optional.ofNullable(nodes.get(nodeId));
+    }
+
+    public SessionNode updateNodeMessage(String nodeId, AgentMessage message) {
+        SessionNode node = nodes.get(nodeId);
+        if (node == null) {
+            throw new IllegalStateException("Node not found: " + nodeId);
+        }
+
+        SessionNode updatedNode = new SessionNode(
+            node.id(),
+            node.parentId(),
+            message,
+            node.timestamp(),
+            new HashMap<>(node.metadata()),
+            estimateTokens(message),
+            node.version(),
+            node.snapshotId()
+        );
+        nodes.put(nodeId, updatedNode);
+        return updatedNode;
+    }
+
+    public void restore(Collection<SessionNode> restoredNodes, String currentBranchId) {
+        nodes.clear();
+        children.clear();
+        rootId = null;
+        this.currentBranchId = null;
+
+        for (SessionNode node : restoredNodes) {
+            nodes.put(node.id(), node);
+            if (node.parentId() == null) {
+                rootId = node.id();
+            } else {
+                children.computeIfAbsent(node.parentId(), key -> new ArrayList<>()).add(node.id());
+            }
+        }
+
+        if (rootId == null && !restoredNodes.isEmpty()) {
+            throw new IllegalArgumentException("Restored session tree does not contain a root node");
+        }
+
+        this.currentBranchId = currentBranchId != null ? currentBranchId : findNewestLeafId(restoredNodes);
+    }
+
+    private String findNewestLeafId(Collection<SessionNode> restoredNodes) {
+        Set<String> parentIds = new HashSet<>();
+        for (SessionNode node : restoredNodes) {
+            if (node.parentId() != null) {
+                parentIds.add(node.parentId());
+            }
+        }
+
+        return restoredNodes.stream()
+            .filter(node -> !parentIds.contains(node.id()))
+            .max(Comparator.comparing(SessionNode::timestamp))
+            .map(SessionNode::id)
+            .orElse(rootId);
+    }
 }

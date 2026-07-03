@@ -32,17 +32,23 @@ Many teams run Java/Spring in production but want pi-mono’s lightweight agent 
   - starter-based embedding into business apps.
 - Can be used as architecture reference even if you keep your own runtime.
 
-## Capability Alignment vs pi-mono (TypeScript)
+## Capability Alignment vs Pi (TypeScript)
 
-Reference upstream: [badlogic/pi-mono](https://github.com/badlogic/pi-mono)
+Reference upstream: [earendil-works/pi](https://github.com/earendil-works/pi)
+Latest checked release: `v0.80.3` (2026-06-30).
+Latest checked main branch also includes post-release coding-agent/AI fixes such as stricter bash timeout validation, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
 
 | Area | Upstream TS (`pi-mono`) | This Java repo | Alignment |
 |---|---|---|---|
-| Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` | Mostly aligned |
-| Session memory/persistence | `packages/mom` | `pi-session` (tree + JSONL) | Mostly aligned |
-| Tool runtime | `packages/pods` | `pi-tools` (read/write/edit/bash/find/grep/ls) | Partially aligned |
-| CLI agent workflow | `packages/coding-agent` | `pi-cli` | Partially aligned |
-| Web UI / rich TUI ecosystem | `packages/web-ui`, `packages/tui` | minimal / in progress | Not aligned yet |
+| Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` (`gpt-5.5` default, model-resolution helpers, request-scoped OpenAI/Anthropic/Bedrock auth/options, Azure Foundry endpoint normalization, HTTP error response bodies, retryable provider errors, Anthropic Messages API with Claude 5 thinking and non-streaming tool-use metadata, Anthropic-compatible + Bedrock Claude Sonnet 5 catalogs and SigV4-signed non-streaming Bedrock invoke payloads) | Partially aligned |
+| Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source) | Mostly aligned for Java use |
+| Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, strict 1-60s bash timeout validation) | Partially aligned |
+| CLI agent workflow | `packages/coding-agent` | `pi-cli` (`--no-session`, `--session-id`, `@file` attachment expansion, improved session/model/resource commands) | Partially aligned |
+| Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, prompt expansion, basic `/skill:name`) | Partially aligned |
+| CLI settings | `settings.json` (`outputPad`, `externalEditor`) | `pi-cli` (`outputPad`, `/edit` via configured `externalEditor`) | Partially aligned |
+| Project trust | `coding-agent` trust manager | `pi-cli` (`/trust`, trust-aware local resource loading) | Partially aligned |
+| RPC session inspection | `rpc-entry`, `get_entries`, `get_tree`, entry renderers | `pi-cli --rpc` JSONL (`get_entries`, `get_tree`, rendered entry summaries) | Minimally aligned |
+| TUI / extension / package ecosystem | `packages/tui`, `coding-agent` extensions, themes, packages | documented gap | Not aligned yet |
 
 Detailed notes: [docs/capability-comparison.md](./docs/capability-comparison.md)
 
@@ -64,14 +70,17 @@ Detailed notes: [docs/capability-comparison.md](./docs/capability-comparison.md)
 # 1) Build
 mvn clean compile
 
-# 2) Spring integration smoke test
+# 2) Session restore/resume/fork tests
+mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest
+
+# 3) Spring integration smoke test
 cd spring-test-example
 mvn spring-boot:run
 # Expect: "所有Spring集成测试通过！"
 
-# 3) CLI smoke test (optional)
+# 4) CLI smoke test (optional)
 cd ..
-printf "help\nexit\n" | mvn -pl pi-cli -DskipTests exec:java
+printf "help\n/session\n/models\n/resources\nexit\n" | mvn -pl pi-cli -DskipTests exec:java
 ```
 
 Quickstart docs:
@@ -87,11 +96,68 @@ Quickstart docs:
 - [x] Reproducible smoke benchmark script and result template
 - [ ] More comprehensive benchmark suite (cross-machine, cross-JDK, repeated runs)
 - [x] Remove `System.exit(0)` from test sample runner and stabilize `mvn test`
+- [x] Restore saved JSONL sessions and expose resume/tree/fork/import/export CLI commands
+- [x] Preserve nested usage metadata such as `usage.reasoningTokens` across JSONL save/load
+- [x] Support deterministic startup session ids with `--session-id` and ephemeral runs with `--no-session`
+- [x] Reject overwriting non-empty invalid JSONL session files
+- [x] Discover context files, prompt templates, and skills in the CLI startup path
+- [x] Gate project-local prompt/skill resources behind a `/trust` decision
+- [x] Expand trusted prompt templates and inject basic `/skill:name` instructions into CLI conversations
+- [x] Expose minimal `--rpc` JSONL session inspection for `get_entries` and `get_tree`
+- [x] Include rendered titles/plain-text/Markdown summaries in RPC `get_entries` output
+- [x] Resolve preferred LLM providers by model id and skip unavailable defaults
+- [x] Expose model-resolution helpers for available model catalogs and exact model-to-provider lookup
+- [x] Align OpenAI default model to `gpt-5.5` and normalize Azure Foundry/OpenAI base URLs
+- [x] Honor request-scoped OpenAI API key, `OPENAI_API_KEY` env override, model, temperature, and max-token options
+- [x] Parse OpenAI token usage metadata including reasoning tokens
+- [x] Preserve provider HTTP response bodies in OpenAI error messages
+- [x] Retry OpenAI provider errors whose response body explicitly asks callers to retry
+- [x] Surface incomplete OpenAI responses when output stops at the token limit
+- [x] Add Anthropic-compatible Claude Sonnet 5 provider catalog entry
+- [x] Send non-streaming Anthropic Messages API requests with Claude Sonnet 5 thinking payloads and parse text/usage responses
+- [x] Honor request-scoped Anthropic API key and `ANTHROPIC_API_KEY` env override
+- [x] Send Anthropic non-streaming tool schemas and parse `tool_use` blocks into assistant message metadata
+- [x] Send SigV4-signed non-streaming Bedrock Anthropic invoke requests, including Claude Sonnet 5 thinking and prompt-cache payload blocks, and parse text/usage responses
+- [x] Resolve Bedrock credentials from explicit properties, a selected AWS shared credentials profile, or AWS environment variables
+- [x] Honor request-scoped Bedrock AWS env credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`) or scoped profile credentials (`AWS_PROFILE`, optional `AWS_SHARED_CREDENTIALS_FILE`) for SigV4 signing
+- [x] Load CLI `settings.json`, apply `outputPad`, and compose with configured `externalEditor` through `/edit`
+- [x] Emit Java-side `session_info_changed` metadata events on session rename
+- [x] Reject non-positive and oversized bash timeouts instead of silently clamping
+- [x] Detect BMP files in `read` and convert them to PNG data URLs
+- [x] Expand CLI `@file` references into attached file blocks before sending messages
 
 ## Evidence (Benchmarks / Test Records)
 
-Latest local verification sample (2026-03-21):
-- `mvn -pl pi-session test`: pass (session persistence unit test).
+Latest local verification sample:
+- `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, and `session_info_changed` rename event tests).
+- `mvn -pl pi-tools -am test -Dtest=BashToolTest,ReadFileToolTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (bash timeout validation and BMP-to-PNG `read` tests).
+- `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (resource discovery tests).
+- `mvn -pl pi-cli -am test -Dtest=PiTrustManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (project trust tests).
+- `mvn -pl pi-cli -am test -Dtest=PiResourceCommandResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (prompt template and basic skill invocation tests).
+- `mvn -pl pi-cli -am test -Dtest=PiFileReferenceResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI `@file` attachment expansion, including BMP-to-PNG payloads).
+- `mvn -pl pi-cli -am test -Dtest=PiRpcCommandHandlerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (minimal RPC `get_entries`/`get_tree` tests, including rendered entry summaries).
+- `mvn -pl pi-cli -am test -Dtest=PiCliStartupOptionsTest,PiCliSettingsLoaderTest,PiCliOutputFormatterTest,PiExternalEditorTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI startup args, settings loading, output padding, and external editor command runner tests).
+- `mvn -pl pi-llm -am test -Dtest=LLMProviderManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (model-id provider resolution, unavailable default-provider skip, available model catalog, and exact model-to-provider helper tests).
+- `mvn -pl pi-llm -am test -Dtest=OpenAIClientTest,OpenAIConfigTest,OpenAILLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (OpenAI HTTP error body, retryable provider errors, default model, request-scoped API key/env/model/options, Azure Foundry endpoint, response content parsing, usage/reasoning token metadata, and incomplete output-length response tests).
+- `mvn -pl pi-llm -am test -Dtest=AnthropicClientTest,AnthropicConfigTest,AnthropicLLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (Anthropic-compatible Claude Sonnet 5 catalog, request-scoped API key/env auth, Messages API request headers/body, Claude 5 thinking payload, non-streaming tool schema request, `tool_use` metadata parsing, HTTP error body, response content, and usage metadata tests).
+- `mvn -pl pi-llm -am test -Dtest=BedrockClientTest,BedrockConfigTest,BedrockLLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (Bedrock Claude Sonnet 5 catalog, SigV4 signing from explicit, shared-profile, environment, request-scoped AWS credentials, or request-scoped AWS profile credentials, non-streaming invoke payload, Claude 5 thinking payload, prompt-cache block, HTTP error body, response content, usage, and region metadata tests).
+- `printf "help\n/resources\n/prompts\n/skills\n/session\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 exec:java`: pass (resource command smoke).
+- `printf "help\n/resources\n/trust\n/resources\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dpi.trust.file=target/trust-smoke.txt exec:java`: pass (trust command smoke).
+- From `target/pi-cli-resource-smoke` with a local `.pi/prompts/review.md` and `.pi/skills/deploy/SKILL.md` fixture, `printf "/resources\n/trust\n/prompts\n/skills\n/review target=api focus=security\n/skill:deploy release service\nexit\n" | mvn -f ../../pom.xml -pl pi-cli -DskipTests -Djava.version=17 -Dpi.trust.file=trust-final.txt exec:java`: pass (trusted prompt/skill command smoke).
+- From `target/pi-cli-settings-smoke` with a local `.pi/settings.json` fixture, `printf "/settings\n/trust\n/settings\nhello settings\nexit\n" | mvn -f ../../pom.xml -pl pi-cli -DskipTests -Djava.version=17 -Dpi.trust.file=trust-settings.txt exec:java`: pass (trusted settings and `outputPad` smoke).
+- From `target/pi-cli-edit-smoke` with a fake external editor script in trusted `.pi/settings.json`, `printf "/trust\n/edit\nexit\n" | mvn -f ../../pom.xml -pl pi-cli -DskipTests -Djava.version=17 -Dpi.trust.file=trust-edit.txt exec:java`: pass after installing updated local snapshots (`/edit` sends the editor-written message).
+- `printf '{"id":1,"method":"get_tree"}\n' | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dexec.args=--rpc exec:java`: pass (minimal JSONL RPC tree smoke).
+- `printf "/session\n/save\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dexec.args="--no-session --session-id stable-cache-id" exec:java`: pass after installing updated local snapshots (deterministic ephemeral startup session id and disabled persistence smoke).
+- `printf "/rename Roadmap Review\n/session\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 exec:java`: pass after installing updated local snapshots (CLI rename emits `session_info_changed` and shows the session name).
+- `printf "/models\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dpi.llm.anthropic.enabled=true -Dpi.llm.anthropic.api-key=test-key exec:java`: pass after installing updated `pi-core`/`pi-llm` artifacts (Anthropic-compatible catalog smoke).
+- `printf "/models\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dpi.llm.bedrock.enabled=true -Dpi.llm.bedrock.region=us-west-2 exec:java`: pass after installing updated `pi-core`/`pi-llm` artifacts (Bedrock catalog smoke).
+
+Bedrock runtime credential notes:
+- Explicit Spring properties: `pi.llm.bedrock.access-key-id`, `pi.llm.bedrock.secret-access-key`, and optional `pi.llm.bedrock.session-token`.
+- Shared profile fallback: `pi.llm.bedrock.profile` or `AWS_PROFILE`, with `pi.llm.bedrock.credentials-file` or `AWS_SHARED_CREDENTIALS_FILE`; otherwise `~/.aws/credentials`.
+- Environment fallback: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN`.
+- Per-request `ChatOptions.env()` override: either `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN`; or `AWS_PROFILE` with optional `AWS_SHARED_CREDENTIALS_FILE`.
+- Do not commit real AWS keys; use environment or secret-managed configuration for real runtime calls.
 - `mvn -f spring-test-example/pom.xml spring-boot:run`: pass.
 - Spring sample startup log: `Started SpringTestApplication in 0.661 seconds` (single-machine sample, non-benchmark-lab).
 - Reproducible smoke benchmark: `./scripts/benchmark_smoke.sh`
@@ -99,6 +165,7 @@ Latest local verification sample (2026-03-21):
   - latest sample report: `benchmarks/benchmark-latest.md`
 
 Known testing caveat:
+- This repo targets Java 21+. If the local machine only has JDK 17, use `-Djava.version=17` only as a compatibility smoke check, not as the canonical release gate.
 - On JDK 24+, you may still see Mockito attach warnings in test logs.  
   `spring-test-example` test resources already force a non-inline mock maker to keep `mvn test` runnable.
 

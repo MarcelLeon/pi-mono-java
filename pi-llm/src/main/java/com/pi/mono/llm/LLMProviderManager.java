@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.ArrayList;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -32,9 +33,9 @@ public class LLMProviderManager {
     }
 
     public LLMProvider getAvailableProvider(String preferredProvider) {
-        // 1. 优先使用指定提供商
+        // 1. 优先使用指定提供商或指定模型对应的可用提供商
         LLMProvider preferred = providers.stream()
-            .filter(p -> p.getId().equals(preferredProvider))
+            .filter(provider -> matchesPreferred(provider, preferredProvider))
             .filter(LLMProvider::isAvailable)
             .findFirst()
             .orElse(null);
@@ -54,6 +55,25 @@ public class LLMProviderManager {
         return getAvailableProvider("mock-claude"); // 默认使用Mock provider
     }
 
+    public Optional<LLMProvider> resolveProviderForModel(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return Optional.empty();
+        }
+
+        return providers.stream()
+            .filter(LLMProvider::isAvailable)
+            .filter(provider -> provider.getAvailableModels().stream()
+                .anyMatch(model -> model.id().equals(modelId)))
+            .findFirst();
+    }
+
+    public List<Model> getAvailableModels() {
+        return providers.stream()
+            .filter(LLMProvider::isAvailable)
+            .flatMap(provider -> provider.getAvailableModels().stream())
+            .toList();
+    }
+
     public List<LLMProvider> getAllProviders() {
         return providers;
     }
@@ -65,6 +85,17 @@ public class LLMProviderManager {
     public void addProvider(LLMProvider provider) {
         providers.add(provider);
         healthCache.put(provider.getId(), provider.health());
+    }
+
+    private boolean matchesPreferred(LLMProvider provider, String preferredProvider) {
+        if (preferredProvider == null || preferredProvider.isBlank()) {
+            return false;
+        }
+        if (provider.getId().equals(preferredProvider)) {
+            return true;
+        }
+        return provider.getAvailableModels().stream()
+            .anyMatch(model -> model.id().equals(preferredProvider));
     }
 }
 

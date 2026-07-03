@@ -179,6 +179,12 @@ Map<String, HealthStatus> health = llmProviderManager.getHealthStatus();
 
 // 使用特定提供商
 LLMProvider provider = llmProviderManager.getAvailableProvider("openai");
+
+// 获取当前可用模型目录
+List<Model> models = llmProviderManager.getAvailableModels();
+
+// 精确解析模型到可用提供商，不做降级
+Optional<LLMProvider> modelProvider = llmProviderManager.resolveProviderForModel("gpt-5.5");
 ```
 
 ### 工具操作

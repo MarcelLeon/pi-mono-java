@@ -4,10 +4,10 @@ import com.pi.mono.llm.config.OpenAIConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
-import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.List;
@@ -27,7 +27,7 @@ public class OpenAIClient {
     private final String apiKey;
 
     public OpenAIClient(OpenAIConfig config) {
-        this.baseUrl = config.getBaseUrl();
+        this.baseUrl = config.getResolvedBaseUrl();
         this.apiKey = config.getApiKey();
 
         this.webClient = WebClient.builder()
@@ -37,33 +37,65 @@ public class OpenAIClient {
                 .build();
     }
 
+    OpenAIClient(OpenAIConfig config, WebClient webClient) {
+        this.baseUrl = config.getResolvedBaseUrl();
+        this.apiKey = config.getApiKey();
+        this.webClient = webClient;
+    }
+
     /**
      * 创建聊天完成请求
      */
     public Mono<String> createChatCompletion(String model, List<Map<String, String>> messages) {
+        return createChatCompletion(model, messages, 0.7, 1000);
+    }
+
+    public Mono<String> createChatCompletion(
+        String model,
+        List<Map<String, String>> messages,
+        double temperature,
+        int maxTokens
+    ) {
+        return createChatCompletion(model, messages, temperature, maxTokens, null);
+    }
+
+    public Mono<String> createChatCompletion(
+        String model,
+        List<Map<String, String>> messages,
+        double temperature,
+        int maxTokens,
+        String requestApiKey
+    ) {
         log.debug("Sending chat completion request for model: {}", model);
 
         // 构建请求体
         Map<String, Object> requestBody = new java.util.HashMap<>();
         requestBody.put("model", model);
         requestBody.put("messages", messages);
-        requestBody.put("temperature", 0.7);
-        requestBody.put("max_tokens", 1000);
+        requestBody.put("temperature", temperature);
+        requestBody.put("max_tokens", maxTokens);
 
         return webClient.post()
-                .uri("/chat/completions")
+                .uri("chat/completions")
+                .headers(headers -> headers.setBearerAuth(resolveApiKey(requestApiKey)))
                 .bodyValue(requestBody)
                 .retrieve()
                 .onStatus(status -> status.isError(), clientResponse -> {
                     log.error("OpenAI API error: {}", clientResponse.statusCode());
                     return clientResponse.bodyToMono(String.class)
-                            .flatMap(errorBody -> Mono.error(new OpenAIException(
-                                    "OpenAI API error: " + clientResponse.statusCode() + ", " + errorBody
-                            )));
+                            .flatMap(errorBody -> Mono.error(toOpenAIException(clientResponse.statusCode(), errorBody)));
                 })
                 .bodyToMono(String.class)
+                .retryWhen(Retry.max(1).filter(OpenAIClient::isRetryableProviderError))
                 .doOnSuccess(response -> log.debug("Received chat completion response"))
                 .doOnError(error -> log.error("Chat completion failed", error));
+    }
+
+    private String resolveApiKey(String requestApiKey) {
+        if (requestApiKey != null && !requestApiKey.isBlank()) {
+            return requestApiKey.trim();
+        }
+        return apiKey;
     }
 
     /**
@@ -71,12 +103,40 @@ public class OpenAIClient {
      */
     public Mono<Boolean> testConnection() {
         return webClient.get()
-                .uri("/models")
+                .uri("models")
                 .retrieve()
                 .bodyToMono(String.class)
                 .map(response -> response != null && response.contains("data"))
                 .onErrorReturn(false)
                 .doOnNext(success -> log.info("OpenAI connection test: {}", success ? "SUCCESS" : "FAILED"));
+    }
+
+    public static String formatHttpErrorMessage(HttpStatusCode statusCode, String responseBody) {
+        String body = responseBody == null || responseBody.isBlank() ? "<empty>" : responseBody;
+        return "OpenAI API error: " + statusCode + ", response body: " + body;
+    }
+
+    private static OpenAIException toOpenAIException(HttpStatusCode statusCode, String responseBody) {
+        String message = formatHttpErrorMessage(statusCode, responseBody);
+        if (isRetryInstruction(responseBody)) {
+            return new RetryableOpenAIException(message);
+        }
+        return new OpenAIException(message);
+    }
+
+    private static boolean isRetryableProviderError(Throwable error) {
+        return error instanceof RetryableOpenAIException;
+    }
+
+    static boolean isRetryInstruction(String responseBody) {
+        if (responseBody == null) {
+            return false;
+        }
+        String normalizedBody = responseBody.toLowerCase();
+        return normalizedBody.contains("please retry")
+            || normalizedBody.contains("retry the request")
+            || normalizedBody.contains("try again")
+            || normalizedBody.contains("temporarily unavailable");
     }
 
     /**
@@ -89,6 +149,12 @@ public class OpenAIClient {
 
         public OpenAIException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    public static class RetryableOpenAIException extends OpenAIException {
+        public RetryableOpenAIException(String message) {
+            super(message);
         }
     }
 }

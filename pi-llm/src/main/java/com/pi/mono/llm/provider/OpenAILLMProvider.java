@@ -1,5 +1,7 @@
 package com.pi.mono.llm.provider;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pi.mono.core.AgentMessage;
 import com.pi.mono.core.LLMProvider;
 import com.pi.mono.core.MessageRole;
@@ -8,6 +10,7 @@ import com.pi.mono.core.ToolCall;
 import com.pi.mono.core.ToolCallResult;
 import com.pi.mono.core.HealthStatus;
 import com.pi.mono.core.ChatRequest;
+import com.pi.mono.core.ChatOptions;
 import com.pi.mono.llm.client.OpenAIClient;
 import com.pi.mono.llm.config.OpenAIConfig;
 import org.slf4j.Logger;
@@ -17,7 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.Collections;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.HashMap;
@@ -32,6 +35,10 @@ import java.util.Map;
 public class OpenAILLMProvider implements LLMProvider {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAILLMProvider.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String OUTPUT_LENGTH_FINISH_REASON = "length";
+    private static final String INCOMPLETE_RESPONSE_MESSAGE =
+        "[Incomplete response: model stopped because it reached the output token limit.]";
 
     private final OpenAIClient openAIClient;
     private final OpenAIConfig config;
@@ -48,32 +55,23 @@ public class OpenAILLMProvider implements LLMProvider {
         log.debug("OpenAI provider: sending chat request for model {}", config.getModel());
 
         try {
-            // 构建消息列表 - 直接使用简化接口
-            List<Map<String, String>> messages = Collections.singletonList(
-                new HashMap<String, String>() {{
-                    put("role", "user");
-                    put("content", "Session: " + request.sessionId());
-                }}
-            );
+            List<Map<String, String>> messages = request.messages().stream()
+                .map(this::toOpenAIMessage)
+                .toList();
+            ChatOptions options = request.options();
+            String model = resolveModel(options);
+            double temperature = options != null ? options.temperature() : 0.7;
+            int maxTokens = options != null && options.maxTokens() > 0 ? options.maxTokens() : 1000;
+            String apiKey = resolveApiKey(options);
 
             // 发送请求 - 使用简化接口
-            var responseMono = openAIClient.createChatCompletion(config.getModel(), messages);
+            var responseMono = openAIClient.createChatCompletion(model, messages, temperature, maxTokens, apiKey);
             var response = responseMono.block(java.time.Duration.ofSeconds(30));
 
             if (response != null && !response.isEmpty()) {
-                // 简单解析JSON响应
-                // 实际项目中应该使用JSON库解析，这里简化处理
-                if (response.contains("content")) {
-                    String content = "OpenAI response: " + request.sessionId();
-                    AgentMessage responseMessage = new AgentMessage(
-                        MessageRole.ASSISTANT,
-                        content,
-                        Collections.emptyMap()
-                    );
-
-                    log.debug("OpenAI provider: received response successfully");
-                    return CompletableFuture.completedFuture(responseMessage);
-                }
+                AgentMessage responseMessage = parseChatCompletion(response);
+                log.debug("OpenAI provider: received response successfully");
+                return CompletableFuture.completedFuture(responseMessage);
             }
 
             throw new RuntimeException("Invalid response from OpenAI API");
@@ -91,9 +89,10 @@ public class OpenAILLMProvider implements LLMProvider {
         try {
             // 简化实现：直接返回支持的模型列表
             return List.of(
-                new Model("gpt-3.5-turbo", "openai", "OpenAI GPT-3.5 Turbo", 16385, new BigDecimal("0.0005").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP)),
-                new Model("gpt-4", "openai", "OpenAI GPT-4", 8192, new BigDecimal("0.03").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP)),
-                new Model("gpt-4-turbo", "openai", "OpenAI GPT-4 Turbo", 128000, new BigDecimal("0.01").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP))
+                new Model("gpt-5.5", "openai", "OpenAI GPT-5.5", 400000, costPerToken("0.001")),
+                new Model("gpt-3.5-turbo", "openai", "OpenAI GPT-3.5 Turbo", 16385, costPerToken("0.0005")),
+                new Model("gpt-4", "openai", "OpenAI GPT-4", 8192, costPerToken("0.03")),
+                new Model("gpt-4-turbo", "openai", "OpenAI GPT-4 Turbo", 128000, costPerToken("0.01"))
             );
         } catch (Exception e) {
             log.warn("Failed to get models from OpenAI API", e);
@@ -101,7 +100,7 @@ public class OpenAILLMProvider implements LLMProvider {
 
         // 返回默认模型列表作为fallback
         return List.of(
-            new Model("gpt-3.5-turbo", "openai", "OpenAI GPT-3.5 Turbo", 16385, new BigDecimal("0.0005").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP))
+            new Model("gpt-5.5", "openai", "OpenAI GPT-5.5", 400000, costPerToken("0.001"))
         );
     }
 
@@ -160,23 +159,121 @@ public class OpenAILLMProvider implements LLMProvider {
         // 根据模型返回实际成本
         String model = config.getModel().toLowerCase();
 
-        if (model.contains("gpt-4")) {
+        if (model.contains("gpt-5")) {
+            return costPerToken("0.001");
+        } else if (model.contains("gpt-4")) {
             // GPT-4: $0.03/1K tokens (输入)
-            return new BigDecimal("0.03").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP);
+            return costPerToken("0.03");
         } else if (model.contains("gpt-3.5")) {
             // GPT-3.5-turbo: $0.0005/1K tokens (输入)
-            return new BigDecimal("0.0005").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP);
+            return costPerToken("0.0005");
         } else if (model.contains("gpt-4-turbo")) {
             // GPT-4 Turbo: $0.01/1K tokens (输入)
-            return new BigDecimal("0.01").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP);
+            return costPerToken("0.01");
         }
 
         // 默认成本
-        return new BigDecimal("0.001").divide(new BigDecimal("1000"), 6, BigDecimal.ROUND_HALF_UP);
+        return costPerToken("0.001");
     }
 
     @Override
     public String getId() {
         return "openai-" + config.getModel();
+    }
+
+    private BigDecimal costPerToken(String costPerThousandTokens) {
+        return new BigDecimal(costPerThousandTokens).divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP);
+    }
+
+    private Map<String, String> toOpenAIMessage(AgentMessage message) {
+        Map<String, String> openAIMessage = new HashMap<>();
+        openAIMessage.put("role", toOpenAIRole(message.role()));
+        openAIMessage.put("content", message.content());
+        return openAIMessage;
+    }
+
+    private String toOpenAIRole(MessageRole role) {
+        return switch (role) {
+            case SYSTEM -> "system";
+            case ASSISTANT -> "assistant";
+            case TOOL_RESULT -> "tool";
+            case USER -> "user";
+        };
+    }
+
+    private String resolveModel(ChatOptions options) {
+        if (options != null && options.model() != null && !options.model().isBlank()) {
+            return options.model();
+        }
+        return config.getModel();
+    }
+
+    private String resolveApiKey(ChatOptions options) {
+        if (options == null) {
+            return null;
+        }
+        if (options.apiKey() != null && !options.apiKey().isBlank()) {
+            return options.apiKey().trim();
+        }
+        String envApiKey = options.env().get("OPENAI_API_KEY");
+        if (envApiKey != null && !envApiKey.isBlank()) {
+            return envApiKey.trim();
+        }
+        return null;
+    }
+
+    private AgentMessage parseChatCompletion(String response) {
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(response);
+            JsonNode choice = root.path("choices").path(0);
+            String content = choice.path("message").path("content").asText(null);
+            String finishReason = choice.path("finish_reason").asText(null);
+
+            if (content == null) {
+                throw new RuntimeException("Invalid response from OpenAI API");
+            }
+
+            Map<String, Object> metadata = new HashMap<>();
+            if (finishReason != null) {
+                metadata.put("finishReason", finishReason);
+            }
+
+            Map<String, Object> usage = parseUsage(root.path("usage"));
+            if (!usage.isEmpty()) {
+                metadata.put("usage", usage);
+            }
+
+            if (OUTPUT_LENGTH_FINISH_REASON.equals(finishReason)) {
+                metadata.put("incomplete", true);
+                content = content + "\n\n" + INCOMPLETE_RESPONSE_MESSAGE;
+            }
+
+            return new AgentMessage(MessageRole.ASSISTANT, content, metadata);
+        } catch (Exception e) {
+            throw new RuntimeException("Invalid response from OpenAI API", e);
+        }
+    }
+
+    private Map<String, Object> parseUsage(JsonNode usageNode) {
+        if (usageNode == null || usageNode.isMissingNode() || usageNode.isNull()) {
+            return Map.of();
+        }
+
+        Map<String, Object> usage = new HashMap<>();
+        putLongIfPresent(usage, "inputTokens", usageNode.path("prompt_tokens"));
+        putLongIfPresent(usage, "outputTokens", usageNode.path("completion_tokens"));
+        putLongIfPresent(usage, "totalTokens", usageNode.path("total_tokens"));
+        putLongIfPresent(
+            usage,
+            "reasoningTokens",
+            usageNode.path("completion_tokens_details").path("reasoning_tokens")
+        );
+        return usage;
+    }
+
+    private void putLongIfPresent(Map<String, Object> target, String key, JsonNode valueNode) {
+        if (valueNode != null && valueNode.canConvertToLong()) {
+            target.put(key, valueNode.asLong());
+        }
     }
 }

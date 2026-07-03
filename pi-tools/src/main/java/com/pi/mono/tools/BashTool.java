@@ -20,6 +20,8 @@ import java.util.regex.Pattern;
 @Component
 public class BashTool implements ToolDefinition {
 
+    private static final int DEFAULT_TIMEOUT_SECONDS = 30;
+    private static final int MAX_TIMEOUT_SECONDS = 60;
     private static final Pattern SAFE_COMMAND_PATTERN = Pattern.compile("^[a-zA-Z0-9_/.\\-\\s\"'\\\\]+$");
     private static final List<String> ALLOWED_COMMANDS = List.of(
         "ls", "cat", "head", "tail", "grep", "find", "echo", "pwd", "date", "whoami", "which",
@@ -40,7 +42,7 @@ public class BashTool implements ToolDefinition {
     public Map<String, ToolParameter> getParameters() {
         Map<String, ToolParameter> params = new HashMap<>();
         params.put("command", new ToolParameter("string", "Bash command to execute", true, null));
-        params.put("timeout", new ToolParameter("integer", "Command timeout in seconds (max 60)", false, 30));
+        params.put("timeout", new ToolParameter("integer", "Command timeout in seconds (1-60)", false, DEFAULT_TIMEOUT_SECONDS));
         return params;
     }
 
@@ -49,10 +51,16 @@ public class BashTool implements ToolDefinition {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String command = (String) request.arguments().get("command");
-                Integer timeout = (Integer) request.arguments().getOrDefault("timeout", 30);
+                int timeout = resolveTimeout(request.arguments().get("timeout"));
 
                 if (command == null || command.trim().isEmpty()) {
                     return ToolExecutionResult.failure("Command parameter is required");
+                }
+
+                if (timeout < 1 || timeout > MAX_TIMEOUT_SECONDS) {
+                    return ToolExecutionResult.failure(
+                        "Invalid timeout: timeout must be between 1 and 60 seconds"
+                    );
                 }
 
                 // 安全检查
@@ -62,10 +70,6 @@ public class BashTool implements ToolDefinition {
 
                 if (!isCommandAllowed(command)) {
                     return ToolExecutionResult.failure("Command is not in the allowed list: " + getCommandName(command));
-                }
-
-                if (timeout > 60) {
-                    timeout = 60;
                 }
 
                 ProcessBuilder processBuilder = new ProcessBuilder();
@@ -98,12 +102,13 @@ public class BashTool implements ToolDefinition {
                 }
 
                 boolean completed = process.waitFor(timeout, TimeUnit.SECONDS);
-                int exitCode = process.exitValue();
 
                 if (!completed) {
                     process.destroyForcibly();
                     return ToolExecutionResult.failure("Command timed out after " + timeout + " seconds");
                 }
+
+                int exitCode = process.exitValue();
 
                 if (exitCode == 0) {
                     return ToolExecutionResult.success(
@@ -120,6 +125,19 @@ public class BashTool implements ToolDefinition {
                 return ToolExecutionResult.failure("Failed to execute command: " + e.getMessage());
             }
         });
+    }
+
+    private int resolveTimeout(Object timeoutValue) {
+        if (timeoutValue == null) {
+            return DEFAULT_TIMEOUT_SECONDS;
+        }
+        if (timeoutValue instanceof Number number) {
+            return number.intValue();
+        }
+        if (timeoutValue instanceof String value) {
+            return Integer.parseInt(value.trim());
+        }
+        throw new IllegalArgumentException("timeout must be an integer");
     }
 
     private boolean isCommandSafe(String command) {

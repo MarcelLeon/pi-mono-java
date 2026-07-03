@@ -139,6 +139,72 @@ class OpenAIClientTest {
     }
 
     @Test
+    void writesToolSchemasIntoRequestBody() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                MockClientHttpRequest mockRequest = new MockClientHttpRequest(request.method(), request.url());
+                mockRequest.setWriteHandler(dataBuffers -> DataBufferUtils.join(dataBuffers)
+                    .doOnNext(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        body.set(new String(bytes, StandardCharsets.UTF_8));
+                    })
+                    .then());
+                BodyInserter.Context context = new BodyInserter.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return ExchangeStrategies.withDefaults().messageWriters();
+                    }
+
+                    @Override
+                    public Optional<ServerHttpRequest> serverRequest() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Map<String, Object> hints() {
+                        return Map.of();
+                    }
+                };
+                return request.body().insert(mockRequest, context)
+                    .thenReturn(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}")
+                        .build());
+            })
+            .build();
+
+        OpenAIClient client = new OpenAIClient(testConfig(), webClient);
+
+        client.createChatCompletion(
+            "gpt-5.5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            0.25,
+            512,
+            List.of(Map.of(
+                "name", "weather",
+                "description", "Read weather",
+                "input_schema", Map.of(
+                    "type", "object",
+                    "properties", Map.of("city", Map.of("type", "string")),
+                    "required", List.of("city")
+                )
+            )),
+            "request-key"
+        ).block();
+
+        JsonNode requestBody = OBJECT_MAPPER.readTree(body.get());
+        JsonNode tool = requestBody.path("tools").path(0);
+        assertEquals("function", tool.path("type").asText());
+        assertEquals("weather", tool.path("function").path("name").asText());
+        assertEquals("Read weather", tool.path("function").path("description").asText());
+        assertEquals("object", tool.path("function").path("parameters").path("type").asText());
+        assertEquals("city", tool.path("function").path("parameters").path("required").path(0).asText());
+    }
+
+    @Test
     void requestScopedApiKeyOverridesConfiguredAuthorizationHeader() {
         AtomicReference<String> authorizationHeader = new AtomicReference<>();
         WebClient webClient = WebClient.builder()

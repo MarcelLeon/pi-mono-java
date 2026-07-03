@@ -1,13 +1,21 @@
 package com.pi.mono.session;
 
 import com.pi.mono.core.*;
+import com.pi.mono.llm.LLMProviderManager;
+import com.pi.mono.tools.ToolDefinition;
+import com.pi.mono.tools.ToolExecutionRequest;
+import com.pi.mono.tools.ToolExecutionResult;
+import com.pi.mono.tools.ToolManager;
+import com.pi.mono.tools.ToolPermissionManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.UUID;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -334,11 +342,231 @@ public class SessionPersistenceUnitTest {
             secondManager.getSessionHistory().get(0).message().metadata().get("sessionName"));
     }
 
+    @Test
+    void sendMessageExecutesProviderToolCallsAndContinuesConversation() throws Exception {
+        SessionManager manager = newSessionManager(sessionPersistence);
+        RecordingProvider provider = new RecordingProvider();
+        ToolManager toolManager = new ToolManager(List.of(new WeatherTool()));
+        ReflectionTestUtils.setField(toolManager, "permissionManager", new ToolPermissionManager());
+        ReflectionTestUtils.setField(manager, "llmProviderManager", new LLMProviderManager(List.of(provider)));
+        ReflectionTestUtils.setField(manager, "toolManager", toolManager);
+
+        manager.createSession("mock-claude");
+
+        AgentMessage finalMessage = manager.sendMessage("Should I take an umbrella in Shanghai?").get();
+
+        assertEquals("Take an umbrella in Shanghai: light rain.", finalMessage.content());
+        assertEquals(2, provider.requests.size());
+        assertEquals("weather", provider.requests.get(0).options().tools().get(0).get("name"));
+
+        List<AgentMessage> secondTurnMessages = provider.requests.get(1).messages();
+        AgentMessage toolResultMessage = secondTurnMessages.get(secondTurnMessages.size() - 1);
+        assertEquals(MessageRole.TOOL_RESULT, toolResultMessage.role());
+        assertEquals("Shanghai: light rain", toolResultMessage.content());
+        assertEquals("toolu_weather_1", toolResultMessage.metadata().get("toolCallId"));
+        assertEquals("weather", toolResultMessage.metadata().get("toolName"));
+        assertEquals(true, toolResultMessage.metadata().get("success"));
+
+        List<SessionNode> history = manager.getSessionHistory();
+        assertEquals(List.of(
+            MessageRole.SYSTEM,
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+            MessageRole.TOOL_RESULT,
+            MessageRole.ASSISTANT
+        ), history.stream().map(node -> node.message().role()).toList());
+    }
+
+    @Test
+    void sendMessageContinuesThroughMultipleProviderToolCallRounds() throws Exception {
+        SessionManager manager = newSessionManager(sessionPersistence);
+        MultiRoundProvider provider = new MultiRoundProvider();
+        ToolManager toolManager = new ToolManager(List.of(new WeatherTool()));
+        ReflectionTestUtils.setField(toolManager, "permissionManager", new ToolPermissionManager());
+        ReflectionTestUtils.setField(manager, "llmProviderManager", new LLMProviderManager(List.of(provider)));
+        ReflectionTestUtils.setField(manager, "toolManager", toolManager);
+
+        manager.createSession("mock-claude");
+
+        AgentMessage finalMessage = manager.sendMessage("Compare city weather.").get();
+
+        assertEquals("Shanghai and Beijing both need umbrellas.", finalMessage.content());
+        assertEquals(3, provider.requests.size());
+
+        List<MessageRole> roles = manager.getSessionHistory().stream()
+            .map(node -> node.message().role())
+            .toList();
+        assertEquals(List.of(
+            MessageRole.SYSTEM,
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+            MessageRole.TOOL_RESULT,
+            MessageRole.ASSISTANT,
+            MessageRole.TOOL_RESULT,
+            MessageRole.ASSISTANT
+        ), roles);
+
+        List<AgentMessage> thirdTurnMessages = provider.requests.get(2).messages();
+        AgentMessage secondToolResult = thirdTurnMessages.get(thirdTurnMessages.size() - 1);
+        assertEquals(MessageRole.TOOL_RESULT, secondToolResult.role());
+        assertEquals("Beijing: light rain", secondToolResult.content());
+        assertEquals("toolu_weather_2", secondToolResult.metadata().get("toolCallId"));
+    }
+
     private SessionManager newSessionManager(SessionPersistence persistence) {
         SessionManager manager = new SessionManager();
         ReflectionTestUtils.setField(manager, "sessionTree", new SessionTree());
         ReflectionTestUtils.setField(manager, "sessionPersistence", persistence);
         ReflectionTestUtils.setField(manager, "defaultModel", "mock-claude");
         return manager;
+    }
+
+    private static final class RecordingProvider implements LLMProvider {
+        private final List<ChatRequest> requests = new ArrayList<>();
+
+        @Override
+        public CompletableFuture<AgentMessage> chat(ChatRequest request) {
+            requests.add(request);
+            if (requests.size() == 1) {
+                return CompletableFuture.completedFuture(new AgentMessage(
+                    MessageRole.ASSISTANT,
+                    "I will check the weather.",
+                    Map.of("toolCalls", List.of(Map.of(
+                        "id", "toolu_weather_1",
+                        "name", "weather",
+                        "arguments", Map.of("city", "Shanghai")
+                    )))
+                ));
+            }
+            return CompletableFuture.completedFuture(new AgentMessage(
+                MessageRole.ASSISTANT,
+                "Take an umbrella in Shanghai: light rain.",
+                Map.of()
+            ));
+        }
+
+        @Override
+        public List<Model> getAvailableModels() {
+            return List.of(new Model("mock-claude", "recording", "Recording model", 1000, BigDecimal.ZERO));
+        }
+
+        @Override
+        public ToolCallResult executeToolCall(ToolCall toolCall, List<AgentMessage> context) {
+            return new ToolCallResult(toolCall.name(), "unused", Map.of());
+        }
+
+        @Override
+        public HealthStatus health() {
+            return HealthStatus.HEALTHY;
+        }
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public BigDecimal getCostPerToken() {
+            return BigDecimal.ZERO;
+        }
+
+        @Override
+        public String getId() {
+            return "recording";
+        }
+    }
+
+    private static final class MultiRoundProvider implements LLMProvider {
+        private final List<ChatRequest> requests = new ArrayList<>();
+
+        @Override
+        public CompletableFuture<AgentMessage> chat(ChatRequest request) {
+            requests.add(request);
+            if (requests.size() == 1) {
+                return CompletableFuture.completedFuture(toolCallMessage(
+                    "Checking Shanghai.",
+                    "toolu_weather_1",
+                    "Shanghai"
+                ));
+            }
+            if (requests.size() == 2) {
+                return CompletableFuture.completedFuture(toolCallMessage(
+                    "Checking Beijing too.",
+                    "toolu_weather_2",
+                    "Beijing"
+                ));
+            }
+            return CompletableFuture.completedFuture(new AgentMessage(
+                MessageRole.ASSISTANT,
+                "Shanghai and Beijing both need umbrellas.",
+                Map.of()
+            ));
+        }
+
+        private AgentMessage toolCallMessage(String content, String id, String city) {
+            return new AgentMessage(
+                MessageRole.ASSISTANT,
+                content,
+                Map.of("toolCalls", List.of(Map.of(
+                    "id", id,
+                    "name", "weather",
+                    "arguments", Map.of("city", city)
+                )))
+            );
+        }
+
+        @Override
+        public List<Model> getAvailableModels() {
+            return List.of(new Model("mock-claude", "multi-round", "Multi-round model", 1000, BigDecimal.ZERO));
+        }
+
+        @Override
+        public ToolCallResult executeToolCall(ToolCall toolCall, List<AgentMessage> context) {
+            return new ToolCallResult(toolCall.name(), "unused", Map.of());
+        }
+
+        @Override
+        public HealthStatus health() {
+            return HealthStatus.HEALTHY;
+        }
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public BigDecimal getCostPerToken() {
+            return BigDecimal.ZERO;
+        }
+
+        @Override
+        public String getId() {
+            return "multi-round";
+        }
+    }
+
+    private static final class WeatherTool implements ToolDefinition {
+        @Override
+        public String getName() {
+            return "weather";
+        }
+
+        @Override
+        public String getDescription() {
+            return "Reads weather for a city.";
+        }
+
+        @Override
+        public Map<String, ToolParameter> getParameters() {
+            return Map.of("city", new ToolParameter("string", "City name", true, null));
+        }
+
+        @Override
+        public CompletableFuture<ToolExecutionResult> execute(ToolExecutionRequest request) {
+            return CompletableFuture.completedFuture(ToolExecutionResult.success(
+                request.arguments().get("city") + ": light rain"
+            ));
+        }
     }
 }

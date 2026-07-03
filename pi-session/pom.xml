@@ -30,6 +30,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Tool execution orchestration -->
+        <dependency>
+            <groupId>com.pi.mono</groupId>
+            <artifactId>pi-tools</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Caffeine for caching -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>

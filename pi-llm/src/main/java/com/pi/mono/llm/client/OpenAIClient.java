@@ -66,6 +66,17 @@ public class OpenAIClient {
         int maxTokens,
         String requestApiKey
     ) {
+        return createChatCompletion(model, messages, temperature, maxTokens, List.of(), requestApiKey);
+    }
+
+    public Mono<String> createChatCompletion(
+        String model,
+        List<Map<String, String>> messages,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        String requestApiKey
+    ) {
         log.debug("Sending chat completion request for model: {}", model);
 
         // 构建请求体
@@ -74,6 +85,11 @@ public class OpenAIClient {
         requestBody.put("messages", messages);
         requestBody.put("temperature", temperature);
         requestBody.put("max_tokens", maxTokens);
+        if (tools != null && !tools.isEmpty()) {
+            requestBody.put("tools", tools.stream()
+                .map(this::openAITool)
+                .toList());
+        }
 
         return webClient.post()
                 .uri("chat/completions")
@@ -89,6 +105,17 @@ public class OpenAIClient {
                 .retryWhen(Retry.max(1).filter(OpenAIClient::isRetryableProviderError))
                 .doOnSuccess(response -> log.debug("Received chat completion response"))
                 .doOnError(error -> log.error("Chat completion failed", error));
+    }
+
+    private Map<String, Object> openAITool(Map<String, Object> tool) {
+        return Map.of(
+            "type", "function",
+            "function", Map.of(
+                "name", tool.get("name"),
+                "description", tool.getOrDefault("description", ""),
+                "parameters", tool.getOrDefault("input_schema", Map.of("type", "object"))
+            )
+        );
     }
 
     private String resolveApiKey(String requestApiKey) {

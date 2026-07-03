@@ -2,11 +2,15 @@ package com.pi.mono.session;
 
 import com.pi.mono.core.*;
 import com.pi.mono.llm.LLMProviderManager;
+import com.pi.mono.tools.ToolDefinition;
+import com.pi.mono.tools.ToolExecutionResult;
+import com.pi.mono.tools.ToolManager;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.Map;
 import java.util.HashMap;
@@ -22,6 +26,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Service
 public class SessionManager {
 
+    private static final int MAX_TOOL_CONTINUATION_ROUNDS = 4;
+
     @Autowired
     private SessionTree sessionTree;
 
@@ -30,6 +36,9 @@ public class SessionManager {
 
     @Autowired(required = false)
     private LLMProviderManager llmProviderManager;
+
+    @Autowired(required = false)
+    private ToolManager toolManager;
 
     @Value("${pi.llm.default-model:${pi.mono.default-model:mock-claude}}")
     private String defaultModel;
@@ -113,7 +122,7 @@ public class SessionManager {
         ChatRequest request = new ChatRequest(
             currentSessionId,
             contextMessages,
-            new ChatOptions(currentModel, 0.7, 1000)
+            new ChatOptions(currentModel, 0.7, 1000, null, Map.of(), toolSchemas())
         );
 
         CompletableFuture<AgentMessage> responseFuture;
@@ -129,6 +138,16 @@ public class SessionManager {
                         "error", ex.getMessage()
                     )
                 ));
+                return responseFuture.thenCompose(responseMessage ->
+                    appendResponseAndMaybeContinue(
+                        userNode.id(),
+                        responseMessage,
+                        provider,
+                        currentModel,
+                        content,
+                        MAX_TOOL_CONTINUATION_ROUNDS
+                    )
+                );
             } catch (Exception ex) {
                 responseFuture = CompletableFuture.completedFuture(new AgentMessage(
                     MessageRole.ASSISTANT,
@@ -153,6 +172,144 @@ public class SessionManager {
             sessionTree.createBranch(userNode.id(), responseMessage);
             return responseMessage;
         });
+    }
+
+    private CompletableFuture<AgentMessage> appendResponseAndMaybeContinue(
+        String parentNodeId,
+        AgentMessage responseMessage,
+        LLMProvider provider,
+        String currentModel,
+        String originalContent,
+        int remainingToolRounds
+    ) {
+        SessionNode assistantNode = sessionTree.createBranch(parentNodeId, responseMessage);
+        List<ToolCall> toolCalls = extractToolCalls(responseMessage);
+        if (toolCalls.isEmpty() || toolManager == null || remainingToolRounds <= 0) {
+            return CompletableFuture.completedFuture(responseMessage);
+        }
+
+        CompletableFuture<SessionNode> lastToolNodeFuture = CompletableFuture.completedFuture(assistantNode);
+        for (ToolCall toolCall : toolCalls) {
+            lastToolNodeFuture = lastToolNodeFuture.thenCompose(parentNode ->
+                toolManager.executeTool(toolCall.name(), toolCall.arguments(), currentSessionId, parentNode.id())
+                    .thenApply(result -> appendToolResult(parentNode.id(), toolCall, result))
+            );
+        }
+
+        return lastToolNodeFuture.thenCompose(lastToolNode -> {
+            List<AgentMessage> continuationMessages = sessionTree.getBranchPath(lastToolNode.id()).stream()
+                .map(SessionNode::message)
+                .toList();
+            ChatRequest continuationRequest = new ChatRequest(
+                currentSessionId,
+                continuationMessages,
+                new ChatOptions(currentModel, 0.7, 1000, null, Map.of(), toolSchemas())
+            );
+            return provider.chat(continuationRequest)
+                .exceptionally(ex -> new AgentMessage(
+                    MessageRole.ASSISTANT,
+                    "Provider error after tool call, fallback response to: " + originalContent,
+                    Map.of(
+                        "timestamp", System.currentTimeMillis(),
+                        "fallback", true,
+                        "error", ex.getMessage()
+                    )
+                ))
+                .thenCompose(finalResponse -> appendResponseAndMaybeContinue(
+                    lastToolNode.id(),
+                    finalResponse,
+                    provider,
+                    currentModel,
+                    originalContent,
+                    remainingToolRounds - 1
+                ));
+        });
+    }
+
+    private SessionNode appendToolResult(String parentNodeId, ToolCall toolCall, ToolExecutionResult result) {
+        Map<String, Object> metadata = new HashMap<>(result.metadata());
+        metadata.put("timestamp", System.currentTimeMillis());
+        metadata.put("toolCallId", toolCall.id());
+        metadata.put("toolName", toolCall.name());
+        metadata.put("success", result.success());
+        return sessionTree.createBranch(parentNodeId, new AgentMessage(
+            MessageRole.TOOL_RESULT,
+            result.content(),
+            metadata
+        ));
+    }
+
+    private List<ToolCall> extractToolCalls(AgentMessage responseMessage) {
+        Object rawToolCalls = responseMessage.metadata().get("toolCalls");
+        if (!(rawToolCalls instanceof List<?> rawList)) {
+            return List.of();
+        }
+
+        List<ToolCall> toolCalls = new ArrayList<>();
+        for (Object rawToolCall : rawList) {
+            if (rawToolCall instanceof ToolCall toolCall) {
+                toolCalls.add(toolCall);
+            } else if (rawToolCall instanceof Map<?, ?> toolCallMap) {
+                String id = stringValue(toolCallMap.get("id"));
+                String name = stringValue(toolCallMap.get("name"));
+                if (name.isBlank()) {
+                    continue;
+                }
+                toolCalls.add(new ToolCall(id, name, objectMap(toolCallMap.get("arguments"))));
+            }
+        }
+        return toolCalls;
+    }
+
+    private List<Map<String, Object>> toolSchemas() {
+        if (toolManager == null) {
+            return List.of();
+        }
+
+        return toolManager.getToolList().stream()
+            .map(this::toolSchema)
+            .toList();
+    }
+
+    private Map<String, Object> toolSchema(ToolDefinition tool) {
+        Map<String, Object> properties = new HashMap<>();
+        List<String> required = new ArrayList<>();
+        tool.getParameters().forEach((name, parameter) -> {
+            Map<String, Object> property = new HashMap<>();
+            property.put("type", parameter.type());
+            property.put("description", parameter.description());
+            if (parameter.defaultValue() != null) {
+                property.put("default", parameter.defaultValue());
+            }
+            properties.put(name, property);
+            if (parameter.required()) {
+                required.add(name);
+            }
+        });
+
+        Map<String, Object> inputSchema = new HashMap<>();
+        inputSchema.put("type", "object");
+        inputSchema.put("properties", properties);
+        inputSchema.put("required", required);
+
+        return Map.of(
+            "name", tool.getName(),
+            "description", tool.getDescription(),
+            "input_schema", inputSchema
+        );
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> rawMap)) {
+            return Map.of();
+        }
+        Map<String, Object> converted = new HashMap<>();
+        rawMap.forEach((key, mapValue) -> converted.put(String.valueOf(key), mapValue));
+        return converted;
     }
 
     public List<SessionNode> getSessionHistory() {

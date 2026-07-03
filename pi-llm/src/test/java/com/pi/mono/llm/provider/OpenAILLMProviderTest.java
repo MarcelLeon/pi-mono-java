@@ -195,6 +195,61 @@ class OpenAILLMProviderTest {
         assertEquals("env-request-key", client.lastApiKey);
     }
 
+    @Test
+    void chatSendsToolSchemasAndParsesToolCalls() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "content": null,
+                    "tool_calls": [
+                      {
+                        "id": "call_weather_1",
+                        "type": "function",
+                        "function": {
+                          "name": "weather",
+                          "arguments": "{\\"city\\":\\"Shanghai\\"}"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": "tool_calls"
+                }
+              ]
+            }
+            """);
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config);
+        List<Map<String, Object>> tools = List.of(Map.of(
+            "name", "weather",
+            "description", "Read weather",
+            "input_schema", Map.of("type", "object")
+        ));
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "weather?", Map.of())),
+            new ChatOptions("gpt-5.5", 0.2, 1024, null, Map.of(), tools)
+        );
+
+        AgentMessage response = provider.chat(request).get();
+
+        assertEquals(tools, client.lastTools);
+        assertEquals("", response.content());
+        assertEquals("tool_calls", response.metadata().get("finishReason"));
+
+        Object toolCallsValue = response.metadata().get("toolCalls");
+        assertTrue(toolCallsValue instanceof List<?>);
+        List<?> toolCalls = (List<?>) toolCallsValue;
+        assertEquals(1, toolCalls.size());
+        assertTrue(toolCalls.get(0) instanceof Map<?, ?>);
+        Map<?, ?> toolCall = (Map<?, ?>) toolCalls.get(0);
+        assertEquals("call_weather_1", toolCall.get("id"));
+        assertEquals("weather", toolCall.get("name"));
+        assertEquals(Map.of("city", "Shanghai"), toolCall.get("arguments"));
+    }
+
     private ChatRequest chatRequest() {
         return new ChatRequest(
             "session-1",
@@ -209,6 +264,7 @@ class OpenAILLMProviderTest {
         private double lastTemperature;
         private int lastMaxTokens;
         private String lastApiKey;
+        private List<Map<String, Object>> lastTools = List.of();
 
         StubOpenAIClient(OpenAIConfig config, String response) {
             super(config);
@@ -238,10 +294,23 @@ class OpenAILLMProviderTest {
             int maxTokens,
             String apiKey
         ) {
+            return createChatCompletion(model, messages, temperature, maxTokens, List.of(), apiKey);
+        }
+
+        @Override
+        public Mono<String> createChatCompletion(
+            String model,
+            List<Map<String, String>> messages,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            String apiKey
+        ) {
             this.lastModel = model;
             this.lastTemperature = temperature;
             this.lastMaxTokens = maxTokens;
             this.lastApiKey = apiKey;
+            this.lastTools = tools;
             return Mono.just(response);
         }
     }

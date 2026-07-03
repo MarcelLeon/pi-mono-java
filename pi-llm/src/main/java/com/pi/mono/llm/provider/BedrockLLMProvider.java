@@ -19,15 +19,21 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 @ConditionalOnProperty(name = "pi.llm.bedrock.enabled", havingValue = "true")
 public class BedrockLLMProvider implements LLMProvider {
     private static final String PROVIDER_ID = "bedrock";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Pattern IMAGE_DATA_URL = Pattern.compile(
+        "data:(image/[^;\\s<]+);base64,([A-Za-z0-9+/=]+)"
+    );
     private final BedrockConfig config;
     private final BedrockClient client;
 
@@ -48,16 +54,18 @@ public class BedrockLLMProvider implements LLMProvider {
             String model = resolveModel(options);
             double temperature = options != null ? options.temperature() : 0.7;
             int maxTokens = options != null && options.maxTokens() > 0 ? options.maxTokens() : 1000;
-            List<Map<String, String>> messages = toBedrockMessages(request.messages());
+            List<Map<String, Object>> messages = toBedrockMessages(request.messages());
             String system = systemPrompt(request.messages());
             BedrockConfig.Credentials requestCredentials = resolveCredentials(options);
+            List<Map<String, Object>> tools = options == null ? List.of() : options.tools();
 
-            String response = client.createMessage(
+            String response = client.createMessageWithContentBlocks(
                 model,
                 messages,
                 system,
                 temperature,
                 maxTokens,
+                tools,
                 requestCredentials
             ).block();
             return CompletableFuture.completedFuture(parseMessageResponse(response, model));
@@ -127,14 +135,82 @@ public class BedrockLLMProvider implements LLMProvider {
         return config.resolveCredentials(options.env()).orElse(null);
     }
 
-    private List<Map<String, String>> toBedrockMessages(List<AgentMessage> messages) {
+    private List<Map<String, Object>> toBedrockMessages(List<AgentMessage> messages) {
         return messages.stream()
             .filter(message -> message.role() != MessageRole.SYSTEM)
-            .map(message -> Map.of(
-                "role", message.role() == MessageRole.ASSISTANT ? "assistant" : "user",
-                "content", message.content() == null ? "" : message.content()
-            ))
+            .map(this::toBedrockMessage)
             .toList();
+    }
+
+    private Map<String, Object> toBedrockMessage(AgentMessage message) {
+        Map<String, Object> requestMessage = new HashMap<>();
+        requestMessage.put("role", message.role() == MessageRole.ASSISTANT ? "assistant" : "user");
+        requestMessage.put("content", toBedrockContent(message));
+        return requestMessage;
+    }
+
+    private Object toBedrockContent(AgentMessage message) {
+        String content = message.content() == null ? "" : message.content();
+        if (message.role() == MessageRole.TOOL_RESULT) {
+            return List.of(toolResultBlock(message, content));
+        }
+        if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
+            return content;
+        }
+
+        List<Map<String, Object>> imageParts = imageContentBlocks(content);
+        if (imageParts.isEmpty()) {
+            return content;
+        }
+
+        List<Map<String, Object>> parts = new java.util.ArrayList<>(imageParts);
+        String text = textBeforeAttachedFiles(content);
+        if (!text.isBlank()) {
+            parts.add(Map.of(
+                "type", "text",
+                "text", text
+            ));
+        }
+        return parts;
+    }
+
+    private Map<String, Object> toolResultBlock(AgentMessage message, String content) {
+        Map<String, Object> block = new HashMap<>();
+        block.put("type", "tool_result");
+        Object toolCallId = message.metadata().get("toolCallId");
+        if (toolCallId != null) {
+            block.put("tool_use_id", String.valueOf(toolCallId));
+        }
+        block.put("content", content);
+        Object success = message.metadata().get("success");
+        if (Boolean.FALSE.equals(success)) {
+            block.put("is_error", true);
+        }
+        return block;
+    }
+
+    private List<Map<String, Object>> imageContentBlocks(String content) {
+        List<Map<String, Object>> parts = new java.util.ArrayList<>();
+        Matcher matcher = IMAGE_DATA_URL.matcher(content);
+        while (matcher.find()) {
+            parts.add(Map.of(
+                "type", "image",
+                "source", Map.of(
+                    "type", "base64",
+                    "media_type", matcher.group(1),
+                    "data", matcher.group(2)
+                )
+            ));
+        }
+        return parts;
+    }
+
+    private String textBeforeAttachedFiles(String content) {
+        int marker = content.indexOf("\n\n[Attached files]\n");
+        if (marker >= 0) {
+            return content.substring(0, marker).trim();
+        }
+        return content.trim();
     }
 
     private String systemPrompt(List<AgentMessage> messages) {
@@ -166,6 +242,10 @@ public class BedrockLLMProvider implements LLMProvider {
         if (usage.has("output_tokens")) {
             metadata.put("outputTokens", usage.path("output_tokens").asInt());
         }
+        List<Map<String, Object>> toolCalls = toolCalls(root.path("content"));
+        if (!toolCalls.isEmpty()) {
+            metadata.put("toolCalls", toolCalls);
+        }
 
         return new AgentMessage(MessageRole.ASSISTANT, content, metadata);
     }
@@ -177,6 +257,23 @@ public class BedrockLLMProvider implements LLMProvider {
             }
         }
         return "";
+    }
+
+    private List<Map<String, Object>> toolCalls(JsonNode content) {
+        if (!content.isArray()) {
+            return List.of();
+        }
+        List<Map<String, Object>> toolCalls = new java.util.ArrayList<>();
+        for (JsonNode item : content) {
+            if ("tool_use".equals(item.path("type").asText())) {
+                Map<String, Object> toolCall = new java.util.HashMap<>();
+                toolCall.put("id", item.path("id").asText());
+                toolCall.put("name", item.path("name").asText());
+                toolCall.put("arguments", OBJECT_MAPPER.convertValue(item.path("input"), Map.class));
+                toolCalls.add(toolCall);
+            }
+        }
+        return toolCalls;
     }
 
     private boolean supportsAdaptiveThinking(String model) {

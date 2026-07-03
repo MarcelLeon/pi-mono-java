@@ -190,6 +190,72 @@ class AnthropicLLMProviderTest {
         assertEquals("Inspect this @chart.png", ((Map<?, ?>) parts.get(1)).get("text"));
     }
 
+    @Test
+    void chatConvertsToolResultsToAnthropicContentBlocks() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "tool result received"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic(), client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.TOOL_RESULT,
+                "15 degrees",
+                Map.of(
+                    "toolCallId", "toolu_123",
+                    "success", true
+                )
+            )),
+            new ChatOptions("claude-sonnet-5", 0.7, 1000)
+        );
+
+        provider.chat(request).join();
+
+        Object content = client.lastRichMessages.get(0).get("content");
+        assertTrue(content instanceof List<?>);
+        List<?> parts = (List<?>) content;
+        Map<?, ?> toolResult = (Map<?, ?>) parts.get(0);
+        assertEquals("tool_result", toolResult.get("type"));
+        assertEquals("toolu_123", toolResult.get("tool_use_id"));
+        assertEquals("15 degrees", toolResult.get("content"));
+        assertEquals(false, toolResult.containsKey("is_error"));
+    }
+
+    @Test
+    void chatMarksFailedToolResultsAsAnthropicErrors() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "tool error received"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic(), client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.TOOL_RESULT,
+                "lookup failed",
+                Map.of(
+                    "toolCallId", "toolu_456",
+                    "success", false
+                )
+            )),
+            new ChatOptions("claude-sonnet-5", 0.7, 1000)
+        );
+
+        provider.chat(request).join();
+
+        List<?> parts = (List<?>) client.lastRichMessages.get(0).get("content");
+        Map<?, ?> toolResult = (Map<?, ?>) parts.get(0);
+        assertEquals("tool_result", toolResult.get("type"));
+        assertEquals("toolu_456", toolResult.get("tool_use_id"));
+        assertEquals("lookup failed", toolResult.get("content"));
+        assertEquals(true, toolResult.get("is_error"));
+    }
+
     private AnthropicConfig configuredAnthropic() {
         AnthropicConfig config = new AnthropicConfig();
         config.setApiKey("test-key");

@@ -151,6 +151,150 @@ class BedrockClientTest {
     }
 
     @Test
+    void writesContentBlocksIntoInvokeRequest() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .baseUrl(testConfig().getRuntimeEndpoint())
+            .exchangeFunction(request -> {
+                MockClientHttpRequest mockRequest = new MockClientHttpRequest(request.method(), request.url());
+                mockRequest.setWriteHandler(dataBuffers -> DataBufferUtils.join(dataBuffers)
+                    .doOnNext(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        body.set(new String(bytes, StandardCharsets.UTF_8));
+                    })
+                    .then());
+                BodyInserter.Context context = new BodyInserter.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return ExchangeStrategies.withDefaults().messageWriters();
+                    }
+
+                    @Override
+                    public Optional<ServerHttpRequest> serverRequest() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Map<String, Object> hints() {
+                        return Map.of();
+                    }
+                };
+                return request.body().insert(mockRequest, context)
+                    .thenReturn(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                        .build());
+            })
+            .build();
+        BedrockClient client = new BedrockClient(testConfig(), webClient);
+
+        client.createMessageWithContentBlocks(
+            "anthropic.claude-sonnet-5",
+            List.of(Map.of(
+                "role",
+                "user",
+                "content",
+                List.of(
+                    Map.of(
+                        "type",
+                        "image",
+                        "source",
+                        Map.of(
+                            "type",
+                            "base64",
+                            "media_type",
+                            "image/jpeg",
+                            "data",
+                            "abc123"
+                        )
+                    ),
+                    Map.of("type", "text", "text", "Inspect this")
+                )
+            )),
+            "",
+            0.7,
+            1000,
+            null
+        ).block();
+
+        JsonNode content = OBJECT_MAPPER.readTree(body.get()).path("messages").path(0).path("content");
+        assertEquals("image", content.path(0).path("type").asText());
+        assertEquals("base64", content.path(0).path("source").path("type").asText());
+        assertEquals("image/jpeg", content.path(0).path("source").path("media_type").asText());
+        assertEquals("abc123", content.path(0).path("source").path("data").asText());
+        assertEquals("text", content.path(1).path("type").asText());
+        assertEquals("Inspect this", content.path(1).path("text").asText());
+    }
+
+    @Test
+    void writesToolSchemasIntoInvokeRequest() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .baseUrl(testConfig().getRuntimeEndpoint())
+            .exchangeFunction(request -> {
+                MockClientHttpRequest mockRequest = new MockClientHttpRequest(request.method(), request.url());
+                mockRequest.setWriteHandler(dataBuffers -> DataBufferUtils.join(dataBuffers)
+                    .doOnNext(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        body.set(new String(bytes, StandardCharsets.UTF_8));
+                    })
+                    .then());
+                BodyInserter.Context context = new BodyInserter.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return ExchangeStrategies.withDefaults().messageWriters();
+                    }
+
+                    @Override
+                    public Optional<ServerHttpRequest> serverRequest() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Map<String, Object> hints() {
+                        return Map.of();
+                    }
+                };
+                return request.body().insert(mockRequest, context)
+                    .thenReturn(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                        .build());
+            })
+            .build();
+        BedrockClient client = new BedrockClient(testConfig(), webClient);
+
+        client.createMessageWithContentBlocks(
+            "anthropic.claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "weather?")),
+            "",
+            0.7,
+            1000,
+            List.of(Map.of(
+                "name", "get_weather",
+                "description", "Get weather for a city",
+                "executionMode", "sequential",
+                "input_schema", Map.of(
+                    "type", "object",
+                    "properties", Map.of("city", Map.of("type", "string"))
+                )
+            )),
+            null
+        ).block();
+
+        JsonNode tool = OBJECT_MAPPER.readTree(body.get()).path("tools").path(0);
+        assertEquals("custom", tool.path("type").asText());
+        assertEquals("get_weather", tool.path("name").asText());
+        assertEquals("Get weather for a city", tool.path("description").asText());
+        assertFalse(tool.has("executionMode"));
+        assertEquals("object", tool.path("input_schema").path("type").asText());
+    }
+
+    @Test
     void signsInvokeRequestWhenAwsCredentialsAreConfigured() {
         BedrockConfig config = testConfig();
         config.setAccessKeyId("AKIDEXAMPLE");

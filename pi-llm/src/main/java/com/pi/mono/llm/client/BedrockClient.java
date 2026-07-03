@@ -81,6 +81,47 @@ public class BedrockClient {
         int maxTokens,
         BedrockConfig.Credentials requestCredentials
     ) {
+        List<Map<String, Object>> contentMessages = messages.stream()
+            .<Map<String, Object>>map(message -> new HashMap<>(message))
+            .toList();
+        return createMessageWithContentBlocks(
+            model,
+            contentMessages,
+            system,
+            temperature,
+            maxTokens,
+            requestCredentials
+        );
+    }
+
+    public Mono<String> createMessageWithContentBlocks(
+        String model,
+        List<Map<String, Object>> messages,
+        String system,
+        double temperature,
+        int maxTokens,
+        BedrockConfig.Credentials requestCredentials
+    ) {
+        return createMessageWithContentBlocks(
+            model,
+            messages,
+            system,
+            temperature,
+            maxTokens,
+            List.of(),
+            requestCredentials
+        );
+    }
+
+    public Mono<String> createMessageWithContentBlocks(
+        String model,
+        List<Map<String, Object>> messages,
+        String system,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        BedrockConfig.Credentials requestCredentials
+    ) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("anthropic_version", ANTHROPIC_VERSION);
         requestBody.put("messages", toBedrockMessages(model, messages, system == null || system.isBlank()));
@@ -91,6 +132,11 @@ public class BedrockClient {
         }
         if (system != null && !system.isBlank()) {
             requestBody.put("system", List.of(systemBlock(model, system)));
+        }
+        if (tools != null && !tools.isEmpty()) {
+            requestBody.put("tools", tools.stream()
+                .map(this::bedrockTool)
+                .toList());
         }
         String requestJson;
         try {
@@ -123,19 +169,27 @@ public class BedrockClient {
 
     private List<Map<String, Object>> toBedrockMessages(
         String model,
-        List<Map<String, String>> messages,
+        List<Map<String, Object>> messages,
         boolean cacheFirstMessage
     ) {
         List<Map<String, Object>> requestMessages = new java.util.ArrayList<>();
         for (int i = 0; i < messages.size(); i++) {
-            Map<String, String> message = messages.get(i);
+            Map<String, Object> message = messages.get(i);
             boolean cacheBlock = cacheFirstMessage && i == 0 && supportsPromptCaching(model);
             requestMessages.add(Map.of(
                 "role", message.getOrDefault("role", "user"),
-                "content", List.of(textBlock(message.getOrDefault("content", ""), cacheBlock))
+                "content", toContentBlocks(message.get("content"), cacheBlock)
             ));
         }
         return requestMessages;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> toContentBlocks(Object content, boolean cacheBlock) {
+        if (content instanceof List<?>) {
+            return (List<Map<String, Object>>) content;
+        }
+        return List.of(textBlock(content == null ? "" : content.toString(), cacheBlock));
     }
 
     private Map<String, Object> systemBlock(String model, String text) {
@@ -156,6 +210,15 @@ public class BedrockClient {
             block.put("cache_control", Map.of("type", "ephemeral"));
         }
         return block;
+    }
+
+    private Map<String, Object> bedrockTool(Map<String, Object> tool) {
+        Map<String, Object> requestTool = new HashMap<>();
+        requestTool.put("type", tool.getOrDefault("type", "custom"));
+        requestTool.put("name", tool.get("name"));
+        requestTool.put("description", tool.getOrDefault("description", ""));
+        requestTool.put("input_schema", tool.getOrDefault("input_schema", Map.of("type", "object")));
+        return requestTool;
     }
 
     private static BedrockException toBedrockException(HttpStatusCode statusCode, String responseBody) {

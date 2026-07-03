@@ -158,6 +158,9 @@ public class AnthropicLLMProvider implements LLMProvider {
 
     private Object toAnthropicContent(AgentMessage message) {
         String content = message.content() == null ? "" : message.content();
+        if (message.role() == MessageRole.TOOL_RESULT) {
+            return List.of(toolResultBlock(message, content));
+        }
         if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
             return content;
         }
@@ -176,6 +179,21 @@ public class AnthropicLLMProvider implements LLMProvider {
             ));
         }
         return parts;
+    }
+
+    private Map<String, Object> toolResultBlock(AgentMessage message, String content) {
+        Map<String, Object> block = new HashMap<>();
+        block.put("type", "tool_result");
+        Object toolCallId = message.metadata().get("toolCallId");
+        if (toolCallId != null) {
+            block.put("tool_use_id", String.valueOf(toolCallId));
+        }
+        block.put("content", content);
+        Object success = message.metadata().get("success");
+        if (Boolean.FALSE.equals(success)) {
+            block.put("is_error", true);
+        }
+        return block;
     }
 
     private List<Map<String, Object>> imageContentBlocks(String content) {

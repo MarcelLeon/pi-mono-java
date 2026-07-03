@@ -25,6 +25,13 @@ public interface ToolDefinition {
     Map<String, ToolParameter> getParameters();
 
     /**
+     * 获取工具执行模式
+     */
+    default String getExecutionMode() {
+        return "sequential";
+    }
+
+    /**
      * 执行工具
      */
     CompletableFuture<ToolExecutionResult> execute(ToolExecutionRequest request);

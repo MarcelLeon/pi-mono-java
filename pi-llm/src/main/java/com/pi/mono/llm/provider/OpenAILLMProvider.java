@@ -26,6 +26,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * OpenAI LLM提供者 - 真实API集成
@@ -40,6 +42,7 @@ public class OpenAILLMProvider implements LLMProvider {
     private static final String OUTPUT_LENGTH_FINISH_REASON = "length";
     private static final String INCOMPLETE_RESPONSE_MESSAGE =
         "[Incomplete response: model stopped because it reached the output token limit.]";
+    private static final Pattern IMAGE_DATA_URL = Pattern.compile("(data:image/[^\\s<]+;base64,[A-Za-z0-9+/=]+)");
 
     private final OpenAIClient openAIClient;
     private final OpenAIConfig config;
@@ -56,7 +59,7 @@ public class OpenAILLMProvider implements LLMProvider {
         log.debug("OpenAI provider: sending chat request for model {}", config.getModel());
 
         try {
-            List<Map<String, String>> messages = request.messages().stream()
+            List<Map<String, Object>> messages = request.messages().stream()
                 .map(this::toOpenAIMessage)
                 .toList();
             ChatOptions options = request.options();
@@ -67,7 +70,14 @@ public class OpenAILLMProvider implements LLMProvider {
             List<Map<String, Object>> tools = options != null ? options.tools() : List.of();
 
             // 发送请求 - 使用简化接口
-            var responseMono = openAIClient.createChatCompletion(model, messages, temperature, maxTokens, tools, apiKey);
+            var responseMono = openAIClient.createChatCompletionWithContentParts(
+                model,
+                messages,
+                temperature,
+                maxTokens,
+                tools,
+                apiKey
+            );
             var response = responseMono.block(java.time.Duration.ofSeconds(30));
 
             if (response != null && !response.isEmpty()) {
@@ -187,10 +197,10 @@ public class OpenAILLMProvider implements LLMProvider {
         return new BigDecimal(costPerThousandTokens).divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP);
     }
 
-    private Map<String, String> toOpenAIMessage(AgentMessage message) {
-        Map<String, String> openAIMessage = new HashMap<>();
+    private Map<String, Object> toOpenAIMessage(AgentMessage message) {
+        Map<String, Object> openAIMessage = new HashMap<>();
         openAIMessage.put("role", toOpenAIRole(message.role()));
-        openAIMessage.put("content", message.content());
+        openAIMessage.put("content", toOpenAIContent(message));
         if (message.role() == MessageRole.TOOL_RESULT) {
             Object toolCallId = message.metadata().get("toolCallId");
             if (toolCallId != null) {
@@ -198,6 +208,44 @@ public class OpenAILLMProvider implements LLMProvider {
             }
         }
         return openAIMessage;
+    }
+
+    private Object toOpenAIContent(AgentMessage message) {
+        String content = message.content() == null ? "" : message.content();
+        if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
+            return content;
+        }
+
+        List<String> imageUrls = imageDataUrls(content);
+        if (imageUrls.isEmpty()) {
+            return content;
+        }
+
+        List<Map<String, Object>> parts = new java.util.ArrayList<>();
+        String text = textBeforeAttachedFiles(content);
+        if (!text.isBlank()) {
+            parts.add(Map.of("type", "text", "text", text));
+        }
+        imageUrls.forEach(imageUrl -> parts.add(Map.of(
+            "type", "image_url",
+            "image_url", Map.of("url", imageUrl)
+        )));
+        return parts;
+    }
+
+    private List<String> imageDataUrls(String content) {
+        Matcher matcher = IMAGE_DATA_URL.matcher(content);
+        List<String> imageUrls = new java.util.ArrayList<>();
+        while (matcher.find()) {
+            imageUrls.add(matcher.group(1));
+        }
+        return imageUrls;
+    }
+
+    private String textBeforeAttachedFiles(String content) {
+        int attachedFilesIndex = content.indexOf("\n\n[Attached files]\n");
+        String text = attachedFilesIndex >= 0 ? content.substring(0, attachedFilesIndex) : content;
+        return text.trim();
     }
 
     private String toOpenAIRole(MessageRole role) {

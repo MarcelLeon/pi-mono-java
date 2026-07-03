@@ -19,15 +19,21 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 @ConditionalOnProperty(name = "pi.llm.anthropic.enabled", havingValue = "true")
 public class AnthropicLLMProvider implements LLMProvider {
     private static final String PROVIDER_ID = "anthropic";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Pattern IMAGE_DATA_URL = Pattern.compile(
+        "data:(image/[^;\\s<]+);base64,([A-Za-z0-9+/=]+)"
+    );
     private final AnthropicConfig config;
     private final AnthropicClient client;
 
@@ -48,12 +54,20 @@ public class AnthropicLLMProvider implements LLMProvider {
             String model = resolveModel(options);
             double temperature = options != null ? options.temperature() : 0.7;
             int maxTokens = options != null && options.maxTokens() > 0 ? options.maxTokens() : 1000;
-            List<Map<String, String>> messages = toAnthropicMessages(request.messages());
+            List<Map<String, Object>> messages = toAnthropicMessages(request.messages());
             String system = systemPrompt(request.messages());
             String apiKey = resolveApiKey(options);
             List<Map<String, Object>> tools = options == null ? List.of() : options.tools();
 
-            String response = client.createMessage(model, messages, system, temperature, maxTokens, tools, apiKey)
+            String response = client.createMessageWithContentParts(
+                    model,
+                    messages,
+                    system,
+                    temperature,
+                    maxTokens,
+                    tools,
+                    apiKey
+                )
                 .block(config.getTimeout());
             return CompletableFuture.completedFuture(parseMessageResponse(response, model));
         } catch (Exception e) {
@@ -128,14 +142,64 @@ public class AnthropicLLMProvider implements LLMProvider {
         return null;
     }
 
-    private List<Map<String, String>> toAnthropicMessages(List<AgentMessage> messages) {
+    private List<Map<String, Object>> toAnthropicMessages(List<AgentMessage> messages) {
         return messages.stream()
             .filter(message -> message.role() != MessageRole.SYSTEM)
-            .map(message -> Map.of(
-                "role", message.role() == MessageRole.ASSISTANT ? "assistant" : "user",
-                "content", message.content() == null ? "" : message.content()
-            ))
+            .map(this::toAnthropicMessage)
             .toList();
+    }
+
+    private Map<String, Object> toAnthropicMessage(AgentMessage message) {
+        Map<String, Object> requestMessage = new HashMap<>();
+        requestMessage.put("role", message.role() == MessageRole.ASSISTANT ? "assistant" : "user");
+        requestMessage.put("content", toAnthropicContent(message));
+        return requestMessage;
+    }
+
+    private Object toAnthropicContent(AgentMessage message) {
+        String content = message.content() == null ? "" : message.content();
+        if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
+            return content;
+        }
+
+        List<Map<String, Object>> imageParts = imageContentBlocks(content);
+        if (imageParts.isEmpty()) {
+            return content;
+        }
+
+        List<Map<String, Object>> parts = new java.util.ArrayList<>(imageParts);
+        String text = textBeforeAttachedFiles(content);
+        if (!text.isBlank()) {
+            parts.add(Map.of(
+                "type", "text",
+                "text", text
+            ));
+        }
+        return parts;
+    }
+
+    private List<Map<String, Object>> imageContentBlocks(String content) {
+        List<Map<String, Object>> parts = new java.util.ArrayList<>();
+        Matcher matcher = IMAGE_DATA_URL.matcher(content);
+        while (matcher.find()) {
+            parts.add(Map.of(
+                "type", "image",
+                "source", Map.of(
+                    "type", "base64",
+                    "media_type", matcher.group(1),
+                    "data", matcher.group(2)
+                )
+            ));
+        }
+        return parts;
+    }
+
+    private String textBeforeAttachedFiles(String content) {
+        int marker = content.indexOf("\n\n[Attached files]\n");
+        if (marker >= 0) {
+            return content.substring(0, marker).trim();
+        }
+        return content.trim();
     }
 
     private String systemPrompt(List<AgentMessage> messages) {

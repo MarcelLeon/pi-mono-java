@@ -152,6 +152,44 @@ class AnthropicLLMProviderTest {
         assertEquals(Map.of("city", "Shanghai"), toolCalls.get(0).get("arguments"));
     }
 
+    @Test
+    void chatConvertsImageAttachmentsToAnthropicContentBlocks() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "image received"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic(), client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.USER,
+                "Inspect this @chart.png\n\n[Attached files]\n"
+                    + "<attachment path=\"chart.png\" resolvedPath=\"/tmp/chart.png\">\n"
+                    + "Content-Type: image/png\n"
+                    + "data:image/png;base64,abc123\n"
+                    + "</attachment>\n",
+                Map.of()
+            )),
+            new ChatOptions("claude-sonnet-5", 0.7, 1000)
+        );
+
+        provider.chat(request).join();
+
+        Object content = client.lastRichMessages.get(0).get("content");
+        assertTrue(content instanceof List<?>);
+        List<?> parts = (List<?>) content;
+        Map<?, ?> imagePart = (Map<?, ?>) parts.get(0);
+        Map<?, ?> source = (Map<?, ?>) imagePart.get("source");
+        assertEquals("image", imagePart.get("type"));
+        assertEquals("base64", source.get("type"));
+        assertEquals("image/png", source.get("media_type"));
+        assertEquals("abc123", source.get("data"));
+        assertEquals("text", ((Map<?, ?>) parts.get(1)).get("type"));
+        assertEquals("Inspect this @chart.png", ((Map<?, ?>) parts.get(1)).get("text"));
+    }
+
     private AnthropicConfig configuredAnthropic() {
         AnthropicConfig config = new AnthropicConfig();
         config.setApiKey("test-key");
@@ -162,6 +200,7 @@ class AnthropicLLMProviderTest {
         private final String response;
         private String lastApiKey;
         private List<Map<String, Object>> lastTools;
+        private List<Map<String, Object>> lastRichMessages = List.of();
 
         StubAnthropicClient(String response) {
             super(new AnthropicConfig());
@@ -203,6 +242,22 @@ class AnthropicLLMProviderTest {
         ) {
             this.lastApiKey = apiKey;
             this.lastTools = tools;
+            return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> createMessageWithContentParts(
+            String model,
+            List<Map<String, Object>> messages,
+            String system,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            String apiKey
+        ) {
+            this.lastApiKey = apiKey;
+            this.lastTools = tools;
+            this.lastRichMessages = messages;
             return Mono.just(response);
         }
     }

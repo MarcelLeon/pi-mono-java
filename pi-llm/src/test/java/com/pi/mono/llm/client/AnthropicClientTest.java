@@ -197,6 +197,7 @@ class AnthropicClientTest {
             List.of(Map.of(
                 "name", "get_weather",
                 "description", "Get weather for a city",
+                "executionMode", "sequential",
                 "input_schema", Map.of(
                     "type", "object",
                     "properties", Map.of("city", Map.of("type", "string"))
@@ -208,10 +209,90 @@ class AnthropicClientTest {
         JsonNode requestBody = OBJECT_MAPPER.readTree(body.get());
         assertEquals("get_weather", requestBody.path("tools").path(0).path("name").asText());
         assertEquals("Get weather for a city", requestBody.path("tools").path(0).path("description").asText());
+        assertEquals(false, requestBody.path("tools").path(0).has("executionMode"));
         assertEquals(
             "object",
             requestBody.path("tools").path(0).path("input_schema").path("type").asText()
         );
+    }
+
+    @Test
+    void writesContentPartsIntoMessagesRequestBody() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .baseUrl(testConfig().getResolvedBaseUrl())
+            .exchangeFunction(request -> {
+                MockClientHttpRequest mockRequest = new MockClientHttpRequest(request.method(), request.url());
+                mockRequest.setWriteHandler(dataBuffers -> DataBufferUtils.join(dataBuffers)
+                    .doOnNext(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        body.set(new String(bytes, StandardCharsets.UTF_8));
+                    })
+                    .then());
+                BodyInserter.Context context = new BodyInserter.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return ExchangeStrategies.withDefaults().messageWriters();
+                    }
+
+                    @Override
+                    public Optional<ServerHttpRequest> serverRequest() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Map<String, Object> hints() {
+                        return Map.of();
+                    }
+                };
+                return request.body().insert(mockRequest, context)
+                    .thenReturn(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                        .build());
+            })
+            .build();
+        AnthropicClient client = new AnthropicClient(testConfig(), webClient);
+
+        client.createMessageWithContentParts(
+            "claude-sonnet-5",
+            List.of(Map.of(
+                "role",
+                "user",
+                "content",
+                List.of(
+                    Map.of(
+                        "type",
+                        "image",
+                        "source",
+                        Map.of(
+                            "type",
+                            "base64",
+                            "media_type",
+                            "image/png",
+                            "data",
+                            "abc123"
+                        )
+                    ),
+                    Map.of("type", "text", "text", "Inspect this")
+                )
+            )),
+            "",
+            0.7,
+            1000,
+            List.of(),
+            null
+        ).block();
+
+        JsonNode content = OBJECT_MAPPER.readTree(body.get()).path("messages").path(0).path("content");
+        assertEquals("image", content.path(0).path("type").asText());
+        assertEquals("base64", content.path(0).path("source").path("type").asText());
+        assertEquals("image/png", content.path(0).path("source").path("media_type").asText());
+        assertEquals("abc123", content.path(0).path("source").path("data").asText());
+        assertEquals("text", content.path(1).path("type").asText());
+        assertEquals("Inspect this", content.path(1).path("text").asText());
     }
 
     private AnthropicConfig testConfig() {

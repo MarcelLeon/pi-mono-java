@@ -250,6 +250,48 @@ class OpenAILLMProviderTest {
         assertEquals(Map.of("city", "Shanghai"), toolCall.get("arguments"));
     }
 
+    @Test
+    void chatConvertsImageAttachmentsToOpenAIContentParts() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {"content": "image received"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            """);
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.USER,
+                "Inspect this @chart.png\n\n[Attached files]\n"
+                    + "<attachment path=\"chart.png\" resolvedPath=\"/tmp/chart.png\">\n"
+                    + "Content-Type: image/png\n"
+                    + "data:image/png;base64,abc123\n"
+                    + "</attachment>\n",
+                Map.of()
+            )),
+            new ChatOptions("gpt-5.5", 0.2, 1024)
+        );
+
+        provider.chat(request).get();
+
+        Object content = client.lastRichMessages.get(0).get("content");
+        assertTrue(content instanceof List<?>);
+        List<?> parts = (List<?>) content;
+        assertEquals("text", ((Map<?, ?>) parts.get(0)).get("type"));
+        assertEquals("image_url", ((Map<?, ?>) parts.get(1)).get("type"));
+        assertEquals(
+            Map.of("url", "data:image/png;base64,abc123"),
+            ((Map<?, ?>) parts.get(1)).get("image_url")
+        );
+    }
+
     private ChatRequest chatRequest() {
         return new ChatRequest(
             "session-1",
@@ -265,6 +307,7 @@ class OpenAILLMProviderTest {
         private int lastMaxTokens;
         private String lastApiKey;
         private List<Map<String, Object>> lastTools = List.of();
+        private List<Map<String, Object>> lastRichMessages = List.of();
 
         StubOpenAIClient(OpenAIConfig config, String response) {
             super(config);
@@ -311,6 +354,24 @@ class OpenAILLMProviderTest {
             this.lastMaxTokens = maxTokens;
             this.lastApiKey = apiKey;
             this.lastTools = tools;
+            return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> createChatCompletionWithContentParts(
+            String model,
+            List<Map<String, Object>> messages,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            String apiKey
+        ) {
+            this.lastModel = model;
+            this.lastTemperature = temperature;
+            this.lastMaxTokens = maxTokens;
+            this.lastApiKey = apiKey;
+            this.lastTools = tools;
+            this.lastRichMessages = messages;
             return Mono.just(response);
         }
     }

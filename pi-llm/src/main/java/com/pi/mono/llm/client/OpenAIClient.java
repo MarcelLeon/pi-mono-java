@@ -77,6 +77,21 @@ public class OpenAIClient {
         List<Map<String, Object>> tools,
         String requestApiKey
     ) {
+        List<Map<String, Object>> contentMessages = messages.stream()
+            .map(message -> new java.util.HashMap<String, Object>(message))
+            .map(message -> (Map<String, Object>) message)
+            .toList();
+        return createChatCompletionWithContentParts(model, contentMessages, temperature, maxTokens, tools, requestApiKey);
+    }
+
+    public Mono<String> createChatCompletionWithContentParts(
+        String model,
+        List<Map<String, Object>> messages,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        String requestApiKey
+    ) {
         log.debug("Sending chat completion request for model: {}", model);
 
         // 构建请求体

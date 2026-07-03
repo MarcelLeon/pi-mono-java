@@ -358,6 +358,7 @@ public class SessionPersistenceUnitTest {
         assertEquals("Take an umbrella in Shanghai: light rain.", finalMessage.content());
         assertEquals(2, provider.requests.size());
         assertEquals("weather", provider.requests.get(0).options().tools().get(0).get("name"));
+        assertEquals("sequential", provider.requests.get(0).options().tools().get(0).get("executionMode"));
 
         List<AgentMessage> secondTurnMessages = provider.requests.get(1).messages();
         AgentMessage toolResultMessage = secondTurnMessages.get(secondTurnMessages.size() - 1);

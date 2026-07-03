@@ -295,6 +295,7 @@ public class SessionManager {
         return Map.of(
             "name", tool.getName(),
             "description", tool.getDescription(),
+            "executionMode", tool.getExecutionMode(),
             "input_schema", inputSchema
         );
     }

@@ -36,13 +36,13 @@ Many teams run Java/Spring in production but want pi-mono’s lightweight agent 
 
 Reference upstream: [earendil-works/pi](https://github.com/earendil-works/pi)
 Latest checked release: `v0.80.3` (2026-06-30).
-Latest checked main branch also includes post-release coding-agent/AI fixes such as stricter bash timeout validation, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
+Latest checked main branch also includes post-release coding-agent/AI fixes such as stricter bash timeout validation, sequential question-tool execution metadata, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
 
 | Area | Upstream TS (`pi-mono`) | This Java repo | Alignment |
 |---|---|---|---|
-| Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` (`gpt-5.5` default, model-resolution helpers, request-scoped OpenAI/Anthropic/Bedrock auth/options, Azure Foundry endpoint normalization, HTTP error response bodies, retryable provider errors, OpenAI/Anthropic non-streaming tool-use metadata, Anthropic Messages API with Claude 5 thinking, Anthropic-compatible + Bedrock Claude Sonnet 5 catalogs and SigV4-signed non-streaming Bedrock invoke payloads) | Partially aligned |
+| Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` (`gpt-5.5` default, model-resolution helpers, request-scoped OpenAI/Anthropic/Bedrock auth/options, Azure Foundry endpoint normalization, HTTP error response bodies, retryable provider errors, OpenAI `image_url` and Anthropic image attachment content parts, OpenAI/Anthropic non-streaming tool-use metadata, Anthropic Messages API with Claude 5 thinking, Anthropic-compatible + Bedrock Claude Sonnet 5 catalogs and SigV4-signed non-streaming Bedrock invoke payloads) | Partially aligned |
 | Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation) | Mostly aligned for Java use |
-| Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, strict 1-60s bash timeout validation, session-level multi-round tool-call execution into `TOOL_RESULT`) | Partially aligned |
+| Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, strict 1-60s bash timeout validation, sequential `executionMode` tool metadata, session-level multi-round tool-call execution into `TOOL_RESULT`) | Partially aligned |
 | CLI agent workflow | `packages/coding-agent` | `pi-cli` (`--no-session`, `--session-id`, `@file` attachment expansion, improved session/model/resource commands) | Partially aligned |
 | Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, prompt expansion, basic `/skill:name`) | Partially aligned |
 | CLI settings | `settings.json` (`outputPad`, `externalEditor`) | `pi-cli` (`outputPad`, `/edit` via configured `externalEditor`) | Partially aligned |
@@ -113,11 +113,14 @@ Quickstart docs:
 - [x] Preserve provider HTTP response bodies in OpenAI error messages
 - [x] Retry OpenAI provider errors whose response body explicitly asks callers to retry
 - [x] Surface incomplete OpenAI responses when output stops at the token limit
+- [x] Convert CLI image attachments into OpenAI non-streaming `image_url` content parts
 - [x] Send OpenAI non-streaming tool schemas and parse `tool_calls` into assistant message metadata
 - [x] Add Anthropic-compatible Claude Sonnet 5 provider catalog entry
 - [x] Send non-streaming Anthropic Messages API requests with Claude Sonnet 5 thinking payloads and parse text/usage responses
 - [x] Honor request-scoped Anthropic API key and `ANTHROPIC_API_KEY` env override
+- [x] Convert CLI image attachments into Anthropic non-streaming image content blocks
 - [x] Send Anthropic non-streaming tool schemas and parse `tool_use` blocks into assistant message metadata
+- [x] Mark exported Java tool schemas with sequential `executionMode`
 - [x] Execute non-streaming provider `toolCalls` through Java tools, append `TOOL_RESULT`, and continue bounded multi-round provider turns
 - [x] Send SigV4-signed non-streaming Bedrock Anthropic invoke requests, including Claude Sonnet 5 thinking and prompt-cache payload blocks, and parse text/usage responses
 - [x] Resolve Bedrock credentials from explicit properties, a selected AWS shared credentials profile, or AWS environment variables
@@ -131,7 +134,7 @@ Quickstart docs:
 ## Evidence (Benchmarks / Test Records)
 
 Latest local verification sample:
-- `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, `session_info_changed` rename event, and bounded multi-round non-streaming tool-call execution/`TOOL_RESULT` continuation tests).
+- `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, `session_info_changed` rename event, sequential tool `executionMode` metadata, and bounded multi-round non-streaming tool-call execution/`TOOL_RESULT` continuation tests).
 - `mvn -pl pi-tools -am test -Dtest=BashToolTest,ReadFileToolTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (bash timeout validation and BMP-to-PNG `read` tests).
 - `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (resource discovery tests).
 - `mvn -pl pi-cli -am test -Dtest=PiTrustManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (project trust tests).
@@ -140,8 +143,8 @@ Latest local verification sample:
 - `mvn -pl pi-cli -am test -Dtest=PiRpcCommandHandlerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (minimal RPC `get_entries`/`get_tree` tests, including rendered entry summaries).
 - `mvn -pl pi-cli -am test -Dtest=PiCliStartupOptionsTest,PiCliSettingsLoaderTest,PiCliOutputFormatterTest,PiExternalEditorTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI startup args, settings loading, output padding, and external editor command runner tests).
 - `mvn -pl pi-llm -am test -Dtest=LLMProviderManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (model-id provider resolution, unavailable default-provider skip, available model catalog, and exact model-to-provider helper tests).
-- `mvn -pl pi-llm -am test -Dtest=OpenAIClientTest,OpenAIConfigTest,OpenAILLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (OpenAI HTTP error body, retryable provider errors, default model, request-scoped API key/env/model/options, Azure Foundry endpoint, response content parsing, usage/reasoning token metadata, incomplete output-length response, non-streaming tool schema request, and `tool_calls` metadata parsing tests).
-- `mvn -pl pi-llm -am test -Dtest=AnthropicClientTest,AnthropicConfigTest,AnthropicLLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (Anthropic-compatible Claude Sonnet 5 catalog, request-scoped API key/env auth, Messages API request headers/body, Claude 5 thinking payload, non-streaming tool schema request, `tool_use` metadata parsing, HTTP error body, response content, and usage metadata tests).
+- `mvn -pl pi-llm -am test -Dtest=OpenAIClientTest,OpenAIConfigTest,OpenAILLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (OpenAI HTTP error body, retryable provider errors, default model, request-scoped API key/env/model/options, Azure Foundry endpoint, response content parsing, usage/reasoning token metadata, incomplete output-length response, OpenAI image attachment content parts, non-streaming tool schema request, and `tool_calls` metadata parsing tests).
+- `mvn -pl pi-llm -am test -Dtest=AnthropicClientTest,AnthropicConfigTest,AnthropicLLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (Anthropic-compatible Claude Sonnet 5 catalog, request-scoped API key/env auth, Messages API request headers/body, Claude 5 thinking payload, image attachment content blocks, non-streaming tool schema request without internal execution metadata leakage, `tool_use` metadata parsing, HTTP error body, response content, and usage metadata tests).
 - `mvn -pl pi-llm -am test -Dtest=BedrockClientTest,BedrockConfigTest,BedrockLLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (Bedrock Claude Sonnet 5 catalog, SigV4 signing from explicit, shared-profile, environment, request-scoped AWS credentials, or request-scoped AWS profile credentials, non-streaming invoke payload, Claude 5 thinking payload, prompt-cache block, HTTP error body, response content, usage, and region metadata tests).
 - `printf "help\n/resources\n/prompts\n/skills\n/session\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 exec:java`: pass (resource command smoke).
 - `printf "help\n/resources\n/trust\n/resources\nexit\n" | mvn -pl pi-cli -DskipTests -Djava.version=17 -Dpi.trust.file=target/trust-smoke.txt exec:java`: pass (trust command smoke).

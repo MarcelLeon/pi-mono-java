@@ -69,6 +69,29 @@ public class AnthropicClient {
         List<Map<String, Object>> tools,
         String requestApiKey
     ) {
+        List<Map<String, Object>> contentMessages = messages.stream()
+            .<Map<String, Object>>map(message -> new HashMap<>(message))
+            .toList();
+        return createMessageWithContentParts(
+            model,
+            contentMessages,
+            system,
+            temperature,
+            maxTokens,
+            tools,
+            requestApiKey
+        );
+    }
+
+    public Mono<String> createMessageWithContentParts(
+        String model,
+        List<Map<String, Object>> messages,
+        String system,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        String requestApiKey
+    ) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", model);
         requestBody.put("messages", messages);
@@ -81,7 +104,9 @@ public class AnthropicClient {
             requestBody.put("system", system);
         }
         if (tools != null && !tools.isEmpty()) {
-            requestBody.put("tools", tools);
+            requestBody.put("tools", tools.stream()
+                .map(this::anthropicTool)
+                .toList());
         }
 
         return webClient.post()
@@ -121,6 +146,14 @@ public class AnthropicClient {
             "type", "enabled",
             "budget_tokens", DEFAULT_THINKING_BUDGET_TOKENS
         );
+    }
+
+    private Map<String, Object> anthropicTool(Map<String, Object> tool) {
+        Map<String, Object> requestTool = new HashMap<>();
+        requestTool.put("name", tool.get("name"));
+        requestTool.put("description", tool.getOrDefault("description", ""));
+        requestTool.put("input_schema", tool.getOrDefault("input_schema", Map.of("type", "object")));
+        return requestTool;
     }
 
     public static class AnthropicException extends RuntimeException {

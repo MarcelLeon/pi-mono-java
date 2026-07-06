@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OpenAIClientTest {
 
@@ -111,6 +112,25 @@ class OpenAIClientTest {
 
         assertEquals("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}", response);
         assertEquals(2, attempts.get());
+    }
+
+    @Test
+    void classifiesDs4ContextOverflowErrorsFromOpenAICompatibleProviders() {
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.BAD_REQUEST)
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .body("{\"error\":{\"message\":\"Prompt has 5,958,968 tokens, but the configured context size is 256,000 tokens\"}}")
+                .build()))
+            .build();
+
+        OpenAIClient client = new OpenAIClient(testConfig(), webClient);
+
+        RuntimeException exception = assertThrows(RuntimeException.class, () -> client.createChatCompletion(
+            "deepseek-v4",
+            List.of(Map.of("role", "user", "content", "hello"))
+        ).block());
+
+        assertEquals("ContextOverflowException", exception.getClass().getSimpleName());
     }
 
     @Test

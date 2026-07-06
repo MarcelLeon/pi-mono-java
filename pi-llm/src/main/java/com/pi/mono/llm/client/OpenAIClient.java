@@ -12,6 +12,7 @@ import reactor.util.retry.Retry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 简化的OpenAI HTTP客户端
@@ -23,6 +24,10 @@ public class OpenAIClient {
     private static final Logger log = LoggerFactory.getLogger(OpenAIClient.class);
     private static final int OPENAI_MIN_OUTPUT_TOKENS = 16;
     private static final int CLOUDFLARE_TIMEOUT_STATUS = 524;
+    private static final Pattern DS4_CONTEXT_OVERFLOW_PATTERN = Pattern.compile(
+        "prompt has [\\d,]+ tokens?, but the configured context size is [\\d,]+ tokens?",
+        Pattern.CASE_INSENSITIVE
+    );
 
     private final WebClient webClient;
     private final String baseUrl;
@@ -166,6 +171,9 @@ public class OpenAIClient {
 
     private static OpenAIException toOpenAIException(HttpStatusCode statusCode, String responseBody) {
         String message = formatHttpErrorMessage(statusCode, responseBody);
+        if (isContextOverflow(responseBody)) {
+            return new ContextOverflowException(message);
+        }
         if (isRetryableStatus(statusCode) || isRetryInstruction(responseBody)) {
             return new RetryableOpenAIException(message);
         }
@@ -178,6 +186,10 @@ public class OpenAIClient {
 
     private static boolean isRetryableStatus(HttpStatusCode statusCode) {
         return statusCode != null && statusCode.value() == CLOUDFLARE_TIMEOUT_STATUS;
+    }
+
+    static boolean isContextOverflow(String responseBody) {
+        return responseBody != null && DS4_CONTEXT_OVERFLOW_PATTERN.matcher(responseBody).find();
     }
 
     static boolean isRetryInstruction(String responseBody) {
@@ -206,6 +218,12 @@ public class OpenAIClient {
 
     public static class RetryableOpenAIException extends OpenAIException {
         public RetryableOpenAIException(String message) {
+            super(message);
+        }
+    }
+
+    public static class ContextOverflowException extends OpenAIException {
+        public ContextOverflowException(String message) {
             super(message);
         }
     }

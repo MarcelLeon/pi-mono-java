@@ -21,6 +21,8 @@ import java.util.Map;
 public class OpenAIClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAIClient.class);
+    private static final int OPENAI_MIN_OUTPUT_TOKENS = 16;
+    private static final int CLOUDFLARE_TIMEOUT_STATUS = 524;
 
     private final WebClient webClient;
     private final String baseUrl;
@@ -99,7 +101,7 @@ public class OpenAIClient {
         requestBody.put("model", model);
         requestBody.put("messages", messages);
         requestBody.put("temperature", temperature);
-        requestBody.put("max_tokens", maxTokens);
+        requestBody.put("max_tokens", clampMaxTokens(maxTokens));
         if (tools != null && !tools.isEmpty()) {
             requestBody.put("tools", tools.stream()
                 .map(this::openAITool)
@@ -133,6 +135,10 @@ public class OpenAIClient {
         );
     }
 
+    private int clampMaxTokens(int maxTokens) {
+        return Math.max(maxTokens, OPENAI_MIN_OUTPUT_TOKENS);
+    }
+
     private String resolveApiKey(String requestApiKey) {
         if (requestApiKey != null && !requestApiKey.isBlank()) {
             return requestApiKey.trim();
@@ -160,7 +166,7 @@ public class OpenAIClient {
 
     private static OpenAIException toOpenAIException(HttpStatusCode statusCode, String responseBody) {
         String message = formatHttpErrorMessage(statusCode, responseBody);
-        if (isRetryInstruction(responseBody)) {
+        if (isRetryableStatus(statusCode) || isRetryInstruction(responseBody)) {
             return new RetryableOpenAIException(message);
         }
         return new OpenAIException(message);
@@ -168,6 +174,10 @@ public class OpenAIClient {
 
     private static boolean isRetryableProviderError(Throwable error) {
         return error instanceof RetryableOpenAIException;
+    }
+
+    private static boolean isRetryableStatus(HttpStatusCode statusCode) {
+        return statusCode != null && statusCode.value() == CLOUDFLARE_TIMEOUT_STATUS;
     }
 
     static boolean isRetryInstruction(String responseBody) {

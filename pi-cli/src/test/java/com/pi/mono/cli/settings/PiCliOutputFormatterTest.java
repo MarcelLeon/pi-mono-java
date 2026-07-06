@@ -14,6 +14,7 @@ class PiCliOutputFormatterTest {
 
         assertEquals("   👤 You: hello", formatter.userMessage("hello"));
         assertEquals("   🤖 Pi: world", formatter.assistantMessage("world"));
+        assertEquals("   💭 Thinking: checking context", formatter.thinkingMessage("checking context"));
     }
 
     @Test
@@ -22,5 +23,6 @@ class PiCliOutputFormatterTest {
 
         assertEquals("👤 You: hello", formatter.userMessage("hello"));
         assertEquals("🤖 Pi: world", formatter.assistantMessage("world"));
+        assertEquals("💭 Thinking: checking context", formatter.thinkingMessage("checking context"));
     }
 }

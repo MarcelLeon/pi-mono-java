@@ -246,6 +246,10 @@ public class BedrockLLMProvider implements LLMProvider {
         if (!toolCalls.isEmpty()) {
             metadata.put("toolCalls", toolCalls);
         }
+        String thinking = thinkingContent(root.path("content"));
+        if (!thinking.isBlank()) {
+            metadata.put("thinking", thinking);
+        }
 
         return new AgentMessage(MessageRole.ASSISTANT, content, metadata);
     }
@@ -257,6 +261,35 @@ public class BedrockLLMProvider implements LLMProvider {
             }
         }
         return "";
+    }
+
+    private String thinkingContent(JsonNode content) {
+        if (!content.isArray()) {
+            return "";
+        }
+        List<String> thinkingParts = new java.util.ArrayList<>();
+        for (JsonNode item : content) {
+            String type = item.path("type").asText();
+            if ("thinking".equals(type)) {
+                String thinking = textValue(item, "thinking");
+                if (!thinking.isBlank()) {
+                    thinkingParts.add(thinking);
+                }
+            } else if ("reasoning".equals(type)) {
+                String reasoning = textValue(item, "text");
+                if (reasoning.isBlank()) {
+                    reasoning = textValue(item, "reasoning");
+                }
+                if (!reasoning.isBlank()) {
+                    thinkingParts.add(reasoning);
+                }
+            }
+        }
+        return String.join("\n", thinkingParts);
+    }
+
+    private String textValue(JsonNode item, String fieldName) {
+        return item.has(fieldName) ? item.path(fieldName).asText().trim() : "";
     }
 
     private List<Map<String, Object>> toolCalls(JsonNode content) {

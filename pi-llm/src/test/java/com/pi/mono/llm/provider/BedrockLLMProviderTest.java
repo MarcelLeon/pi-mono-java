@@ -226,6 +226,34 @@ class BedrockLLMProviderTest {
     }
 
     @Test
+    void chatPreservesThinkingContentInMetadata() {
+        BedrockConfig config = new BedrockConfig();
+        config.setRegion("us-west-2");
+        BedrockLLMProvider provider = new BedrockLLMProvider(
+            config,
+            new StubBedrockClient("""
+                {
+                  "content": [
+                    {"type": "thinking", "thinking": "I should inspect the AWS context."},
+                    {"type": "text", "text": "Here is the answer."}
+                  ],
+                  "usage": {"input_tokens": 11, "output_tokens": 7}
+                }
+                """)
+        );
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions("anthropic.claude-sonnet-5", 0.7, 1000)
+        );
+
+        AgentMessage response = provider.chat(request).join();
+
+        assertEquals("Here is the answer.", response.content());
+        assertEquals("I should inspect the AWS context.", response.metadata().get("thinking"));
+    }
+
+    @Test
     void chatConvertsToolResultsToBedrockContentBlocks() {
         BedrockConfig config = new BedrockConfig();
         config.setRegion("us-west-2");

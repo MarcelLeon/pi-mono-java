@@ -8,6 +8,7 @@ import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.HttpMessageWriter;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -84,6 +85,35 @@ class OpenAIClientTest {
     }
 
     @Test
+    void retriesCloudflareTimeoutStatusFromOpenAICompatibleProviders() {
+        AtomicInteger attempts = new AtomicInteger();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                if (attempts.incrementAndGet() == 1) {
+                    return Mono.just(ClientResponse.create(HttpStatusCode.valueOf(524))
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
+                        .body("Cloudflare timeout")
+                        .build());
+                }
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}")
+                    .build());
+            })
+            .build();
+
+        OpenAIClient client = new OpenAIClient(testConfig(), webClient);
+
+        String response = client.createChatCompletion(
+            "gpt-5.5",
+            List.of(Map.of("role", "user", "content", "hello"))
+        ).block();
+
+        assertEquals("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}", response);
+        assertEquals(2, attempts.get());
+    }
+
+    @Test
     void writesRequestScopedModelOptionsIntoRequestBody() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         WebClient webClient = WebClient.builder()
@@ -136,6 +166,57 @@ class OpenAIClientTest {
         assertEquals(0.25, requestBody.path("temperature").asDouble());
         assertEquals(512, requestBody.path("max_tokens").asInt());
         assertEquals("hello", requestBody.path("messages").path(0).path("content").asText());
+    }
+
+    @Test
+    void clampsMaxTokensBelowOpenAIProviderMinimum() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                MockClientHttpRequest mockRequest = new MockClientHttpRequest(request.method(), request.url());
+                mockRequest.setWriteHandler(dataBuffers -> DataBufferUtils.join(dataBuffers)
+                    .doOnNext(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        body.set(new String(bytes, StandardCharsets.UTF_8));
+                    })
+                    .then());
+                BodyInserter.Context context = new BodyInserter.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return ExchangeStrategies.withDefaults().messageWriters();
+                    }
+
+                    @Override
+                    public Optional<ServerHttpRequest> serverRequest() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Map<String, Object> hints() {
+                        return Map.of();
+                    }
+                };
+                return request.body().insert(mockRequest, context)
+                    .thenReturn(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}")
+                        .build());
+            })
+            .build();
+
+        OpenAIClient client = new OpenAIClient(testConfig(), webClient);
+
+        client.createChatCompletion(
+            "gpt-5.5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            0.25,
+            1
+        ).block();
+
+        JsonNode requestBody = OBJECT_MAPPER.readTree(body.get());
+        assertEquals(16, requestBody.path("max_tokens").asInt());
     }
 
     @Test

@@ -26,6 +26,7 @@ import java.util.Scanner;
 import java.util.HashMap;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -633,6 +634,8 @@ public class PiCliApplication implements CommandLineRunner {
 
             // 等待并显示AI响应
             AgentMessage response = futureResponse.get();
+            extractThinking(response).ifPresent(thinking ->
+                System.out.println(formatter.thinkingMessage(thinking)));
             System.out.println(formatter.assistantMessage(response.content()));
             System.out.println();
 
@@ -663,5 +666,14 @@ public class PiCliApplication implements CommandLineRunner {
         }
 
         return args;
+    }
+
+    private Optional<String> extractThinking(AgentMessage response) {
+        Object thinking = response.metadata().getOrDefault("thinking", response.metadata().get("reasoning"));
+        if (thinking == null) {
+            return Optional.empty();
+        }
+        String content = String.valueOf(thinking).trim();
+        return content.isBlank() ? Optional.empty() : Optional.of(content);
     }
 }

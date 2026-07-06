@@ -14,4 +14,8 @@ public class PiCliOutputFormatter {
     public String assistantMessage(String content) {
         return padding + "🤖 Pi: " + content;
     }
+
+    public String thinkingMessage(String content) {
+        return padding + "💭 Thinking: " + content;
+    }
 }

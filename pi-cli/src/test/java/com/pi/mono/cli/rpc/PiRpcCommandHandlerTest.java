@@ -50,6 +50,7 @@ class PiRpcCommandHandlerTest {
         assertEquals(3, result.get("entries").size());
         assertEquals("SYSTEM", result.get("entries").get(0).get("role").asText());
         assertEquals("USER", result.get("entries").get(1).get("role").asText());
+        assertTailDerivedShortId(result.get("entries").get(1));
         assertEquals("hello rpc", result.get("entries").get(1).get("content").asText());
         assertNotNull(result.get("entries").get(1).get("rendered"));
         assertEquals("User", result.get("entries").get(1).get("rendered").get("title").asText());
@@ -73,6 +74,7 @@ class PiRpcCommandHandlerTest {
         assertEquals(3, result.get("nodes").size());
         assertEquals(1, result.get("nodes").get(0).get("children").size());
         assertEquals(result.get("nodes").get(1).get("id").asText(), result.get("nodes").get(0).get("children").get(0).asText());
+        assertTailDerivedShortId(result.get("nodes").get(1));
         assertEquals("USER", result.get("nodes").get(1).get("role").asText());
         assertEquals("ASSISTANT", result.get("nodes").get(2).get("role").asText());
     }
@@ -95,5 +97,14 @@ class PiRpcCommandHandlerTest {
 
     private JsonNode handle(String request) throws Exception {
         return objectMapper.readTree(handler.handle(request));
+    }
+
+    private void assertTailDerivedShortId(JsonNode entry) {
+        String id = entry.get("id").asText();
+        JsonNode shortIdNode = entry.get("shortId");
+        assertNotNull(shortIdNode);
+        String shortId = shortIdNode.asText();
+        assertEquals(8, shortId.length());
+        assertEquals(id.substring(id.length() - 8), shortId);
     }
 }

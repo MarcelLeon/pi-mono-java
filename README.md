@@ -36,7 +36,7 @@ Many teams run Java/Spring in production but want pi-mono’s lightweight agent 
 
 Reference upstream: [earendil-works/pi](https://github.com/earendil-works/pi)
 Latest checked release: `v0.80.3` (2026-06-30).
-Latest checked main branch also includes post-release coding-agent/AI fixes through 2026-07-06 such as OpenAI Responses max-output-token floor clamping, Cloudflare 524 retry classification, OpenAI Codex WebSocket connection rotation, DS4 context-overflow detection, split-turn compaction summary serialization, delayed Copilot device-code token polling, entry renderers, model metadata cleanup, stricter bash timeout validation, sequential question-tool execution metadata, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
+Latest checked main branch also includes post-release coding-agent/AI fixes through 2026-07-06 such as OpenAI Responses max-output-token floor clamping, Cloudflare 524 retry classification, OpenAI Codex WebSocket connection rotation, DS4 context-overflow detection, split-turn compaction summary serialization, delayed Copilot device-code token polling, entry renderers, short session entry ids from generated id random tails, model metadata cleanup, stricter bash timeout validation, sequential question-tool execution metadata, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
 
 | Area | Upstream TS (`pi-mono`) | This Java repo | Alignment |
 |---|---|---|---|
@@ -47,7 +47,7 @@ Latest checked main branch also includes post-release coding-agent/AI fixes thro
 | Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, prompt expansion, basic `/skill:name`) | Partially aligned |
 | CLI settings | `settings.json` (`outputPad`, `externalEditor`) | `pi-cli` (`outputPad` for user/assistant/thinking lines, `/edit` via configured `externalEditor`) | Partially aligned |
 | Project trust | `coding-agent` trust manager | `pi-cli` (`/trust`, trust-aware local resource loading) | Partially aligned |
-| RPC session inspection | `rpc-entry`, `get_entries`, `get_tree`, entry renderers | `pi-cli --rpc` JSONL (`get_entries`, `get_tree`, rendered entry summaries) | Minimally aligned |
+| RPC session inspection | `rpc-entry`, `get_entries`, `get_tree`, entry renderers, tail-derived short entry ids | `pi-cli --rpc` JSONL (`get_entries`, `get_tree`, rendered entry summaries, `shortId` from full-id random tails) | Minimally aligned |
 | TUI / extension / package ecosystem | `packages/tui`, `coding-agent` extensions, themes, packages | documented gap | Not aligned yet |
 
 Detailed notes: [docs/capability-comparison.md](./docs/capability-comparison.md)
@@ -105,6 +105,7 @@ Quickstart docs:
 - [x] Expand trusted prompt templates and inject basic `/skill:name` instructions into CLI conversations
 - [x] Expose minimal `--rpc` JSONL session inspection for `get_entries` and `get_tree`
 - [x] Include rendered titles/plain-text/Markdown summaries in RPC `get_entries` output
+- [x] Expose tail-derived `shortId` fields in RPC session entries and tree nodes
 - [x] Resolve preferred LLM providers by model id and skip unavailable defaults
 - [x] Expose model-resolution helpers for available model catalogs and exact model-to-provider lookup
 - [x] Align OpenAI default model to `gpt-5.5` and normalize Azure Foundry/OpenAI base URLs
@@ -145,7 +146,7 @@ Latest local verification sample:
 - `mvn -pl pi-cli -am test -Dtest=PiTrustManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (project trust tests).
 - `mvn -pl pi-cli -am test -Dtest=PiResourceCommandResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (prompt template and basic skill invocation tests).
 - `mvn -pl pi-cli -am test -Dtest=PiFileReferenceResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI `@file` attachment expansion, including BMP-to-PNG payloads).
-- `mvn -pl pi-cli -am test -Dtest=PiRpcCommandHandlerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (minimal RPC `get_entries`/`get_tree` tests, including rendered entry summaries).
+- `mvn -pl pi-cli -am test -Dtest=PiRpcCommandHandlerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (minimal RPC `get_entries`/`get_tree` tests, including rendered entry summaries and tail-derived `shortId` fields).
 - `mvn -pl pi-cli -am test -Dtest=PiCliStartupOptionsTest,PiCliSettingsLoaderTest,PiCliOutputFormatterTest,PiExternalEditorTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI startup args, settings loading, user/assistant/thinking output padding, and external editor command runner tests).
 - `mvn -pl pi-llm -am test -Dtest=LLMProviderManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (model-id provider resolution, unavailable default-provider skip, available model catalog, and exact model-to-provider helper tests).
 - `mvn -pl pi-llm -am test -Dtest=OpenAIClientTest,OpenAIConfigTest,OpenAILLMProviderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (OpenAI HTTP error body, retryable provider errors, HTTP 524 timeout retry classification, DS4 context-overflow classification, request output-token floor clamping, default model, request-scoped API key/env/model/options, Azure Foundry endpoint, response content parsing, usage/reasoning token metadata, incomplete output-length response, OpenAI image attachment content parts, non-streaming tool schema request, and `tool_calls` metadata parsing tests).

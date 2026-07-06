@@ -99,6 +99,7 @@ public class PiRpcCommandHandler {
     private Map<String, Object> commonNodeFields(SessionNode node) {
         Map<String, Object> entry = new LinkedHashMap<>();
         entry.put("id", node.id());
+        entry.put("shortId", shortId(node.id()));
         entry.put("parentId", node.parentId());
         entry.put("role", node.message().role().name());
         entry.put("content", node.message().content());
@@ -108,6 +109,13 @@ public class PiRpcCommandHandler {
         entry.put("version", node.version());
         entry.put("snapshotId", node.snapshotId().orElse(null));
         return entry;
+    }
+
+    private String shortId(String id) {
+        if (id == null || id.length() <= 8) {
+            return id;
+        }
+        return id.substring(id.length() - 8);
     }
 
     private Map<String, List<String>> childIndex(List<SessionNode> nodes) {

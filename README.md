@@ -41,7 +41,7 @@ Latest checked main branch also includes post-release coding-agent/AI fixes thro
 | Area | Upstream TS (`pi-mono`) | This Java repo | Alignment |
 |---|---|---|---|
 | Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` (`gpt-5.5` default, model-resolution helpers, request-scoped OpenAI/Anthropic/Bedrock auth/options, Azure Foundry endpoint normalization, HTTP error response bodies, retryable provider errors, OpenAI output-token floor clamping, OpenAI-compatible HTTP 524 retry classification, OpenAI-compatible DS4 context-overflow classification, OpenAI `image_url`, Anthropic image, and Bedrock image attachment content parts, OpenAI/Anthropic/Bedrock non-streaming tool-use metadata and provider-native tool-result blocks, Anthropic/Bedrock thinking content metadata, Anthropic Messages API with Claude 5 thinking, Anthropic-compatible + Bedrock Claude Sonnet 5 catalogs and SigV4-signed non-streaming Bedrock invoke payloads) | Partially aligned |
-| Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation) | Mostly aligned for Java use |
+| Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification, split-turn compaction summary serialization | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation, serialized split-turn summary orchestration) | Mostly aligned for Java use |
 | Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, strict 1-60s bash timeout validation, sequential `executionMode` tool metadata, session-level multi-round tool-call execution into `TOOL_RESULT`) | Partially aligned |
 | CLI agent workflow | `packages/coding-agent` | `pi-cli` (`--no-session`, `--session-id`, `@file` attachment expansion, improved session/model/resource commands) | Partially aligned |
 | Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, prompt expansion, basic `/skill:name`) | Partially aligned |
@@ -98,6 +98,7 @@ Quickstart docs:
 - [x] Remove `System.exit(0)` from test sample runner and stabilize `mvn test`
 - [x] Restore saved JSONL sessions and expose resume/tree/fork/import/export CLI commands
 - [x] Preserve nested usage metadata such as `usage.reasoningTokens` across JSONL save/load
+- [x] Serialize split-turn compaction summary requests so single-concurrency providers are not called concurrently
 - [x] Support deterministic startup session ids with `--session-id` and ephemeral runs with `--no-session`
 - [x] Reject overwriting non-empty invalid JSONL session files
 - [x] Discover context files, prompt templates, and skills in the CLI startup path
@@ -141,6 +142,7 @@ Quickstart docs:
 
 Latest local verification sample:
 - `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, `session_info_changed` rename event, sequential tool `executionMode` metadata, and bounded multi-round non-streaming tool-call execution/`TOOL_RESULT` continuation tests).
+- `mvn -pl pi-session -am test -Dtest=SessionCompactionServiceTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (split-turn compaction summary requests are serialized before merging history and turn-prefix summaries).
 - `mvn -pl pi-tools -am test -Dtest=BashToolTest,ReadFileToolTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (bash timeout validation and BMP-to-PNG `read` tests).
 - `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (resource discovery tests).
 - `mvn -pl pi-cli -am test -Dtest=PiTrustManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (project trust tests).

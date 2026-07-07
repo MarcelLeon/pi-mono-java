@@ -12,18 +12,31 @@ public record ChatOptions(
     int maxTokens,
     String apiKey,
     Map<String, String> env,
-    List<Map<String, Object>> tools
+    List<Map<String, Object>> tools,
+    Map<String, String> headers
 ) {
     public ChatOptions(String model, double temperature, int maxTokens) {
-        this(model, temperature, maxTokens, null, Map.of(), List.of());
+        this(model, temperature, maxTokens, null, Map.of(), List.of(), Map.of());
     }
 
     public ChatOptions(String model, double temperature, int maxTokens, String apiKey, Map<String, String> env) {
-        this(model, temperature, maxTokens, apiKey, env, List.of());
+        this(model, temperature, maxTokens, apiKey, env, List.of(), Map.of());
+    }
+
+    public ChatOptions(
+        String model,
+        double temperature,
+        int maxTokens,
+        String apiKey,
+        Map<String, String> env,
+        List<Map<String, Object>> tools
+    ) {
+        this(model, temperature, maxTokens, apiKey, env, tools, Map.of());
     }
 
     public ChatOptions {
         env = env == null ? Map.of() : Map.copyOf(env);
         tools = tools == null ? List.of() : List.copyOf(tools);
+        headers = headers == null ? Map.of() : Map.copyOf(headers);
     }
 }

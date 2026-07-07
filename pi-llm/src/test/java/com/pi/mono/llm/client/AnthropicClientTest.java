@@ -180,6 +180,34 @@ class AnthropicClientTest {
     }
 
     @Test
+    void writesRequestScopedProviderHeaders() {
+        AtomicReference<String> traceHeader = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                traceHeader.set(request.headers().getFirst("x-pi-trace-id"));
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                    .build());
+            })
+            .build();
+        AnthropicClient client = new AnthropicClient(testConfig(), webClient);
+
+        client.createMessageWithContentParts(
+            "claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            "",
+            0.7,
+            1000,
+            List.of(),
+            "request-key",
+            Map.of("x-pi-trace-id", "trace-1")
+        ).block();
+
+        assertEquals("trace-1", traceHeader.get());
+    }
+
+    @Test
     void writesToolSchemasIntoMessagesRequestBody() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         WebClient webClient = WebClient.builder()

@@ -69,6 +69,7 @@ public class OpenAILLMProvider implements LLMProvider {
             int maxTokens = options != null && options.maxTokens() > 0 ? options.maxTokens() : 1000;
             String apiKey = resolveApiKey(options);
             List<Map<String, Object>> tools = options != null ? options.tools() : List.of();
+            Map<String, String> headers = options != null ? options.headers() : Map.of();
 
             // 发送请求 - 使用简化接口
             var responseMono = openAIClient.createChatCompletionWithContentParts(
@@ -77,7 +78,8 @@ public class OpenAILLMProvider implements LLMProvider {
                 temperature,
                 maxTokens,
                 tools,
-                apiKey
+                apiKey,
+                headers
             );
             var response = responseMono.block(java.time.Duration.ofSeconds(30));
 

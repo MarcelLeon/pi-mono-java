@@ -196,6 +196,40 @@ class OpenAILLMProviderTest {
     }
 
     @Test
+    void chatPassesRequestScopedHeadersToClient() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {"content": "header answer"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            """);
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "gpt-5.5",
+                0.2,
+                1024,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("x-pi-trace-id", "trace-1")
+            )
+        );
+
+        provider.chat(request).get();
+
+        assertEquals(Map.of("x-pi-trace-id", "trace-1"), client.lastHeaders);
+    }
+
+    @Test
     void chatSendsToolSchemasAndParsesToolCalls() throws Exception {
         OpenAIConfig config = new OpenAIConfig();
         config.setApiKey("configured-key");
@@ -340,6 +374,7 @@ class OpenAILLMProviderTest {
         private int lastMaxTokens;
         private String lastApiKey;
         private List<Map<String, Object>> lastTools = List.of();
+        private Map<String, String> lastHeaders = Map.of();
         private List<Map<String, Object>> lastRichMessages = List.of();
 
         StubOpenAIClient(OpenAIConfig config, String response) {
@@ -387,6 +422,26 @@ class OpenAILLMProviderTest {
             this.lastMaxTokens = maxTokens;
             this.lastApiKey = apiKey;
             this.lastTools = tools;
+            return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> createChatCompletionWithContentParts(
+            String model,
+            List<Map<String, Object>> messages,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            String apiKey,
+            Map<String, String> headers
+        ) {
+            this.lastModel = model;
+            this.lastTemperature = temperature;
+            this.lastMaxTokens = maxTokens;
+            this.lastApiKey = apiKey;
+            this.lastTools = tools;
+            this.lastHeaders = headers;
+            this.lastRichMessages = messages;
             return Mono.just(response);
         }
 

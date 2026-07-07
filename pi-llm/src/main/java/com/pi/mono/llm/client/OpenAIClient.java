@@ -92,7 +92,14 @@ public class OpenAIClient {
             .map(message -> new java.util.HashMap<String, Object>(message))
             .map(message -> (Map<String, Object>) message)
             .toList();
-        return createChatCompletionWithContentParts(model, contentMessages, temperature, maxTokens, tools, requestApiKey);
+        return createChatCompletionWithContentParts(
+            model,
+            contentMessages,
+            temperature,
+            maxTokens,
+            tools,
+            requestApiKey
+        );
     }
 
     public Mono<String> createChatCompletionWithContentParts(
@@ -102,6 +109,26 @@ public class OpenAIClient {
         int maxTokens,
         List<Map<String, Object>> tools,
         String requestApiKey
+    ) {
+        return createChatCompletionWithContentParts(
+            model,
+            messages,
+            temperature,
+            maxTokens,
+            tools,
+            requestApiKey,
+            Map.of()
+        );
+    }
+
+    public Mono<String> createChatCompletionWithContentParts(
+        String model,
+        List<Map<String, Object>> messages,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        String requestApiKey,
+        Map<String, String> requestHeaders
     ) {
         log.debug("Sending chat completion request for model: {}", model);
 
@@ -119,7 +146,10 @@ public class OpenAIClient {
 
         return webClient.post()
                 .uri("chat/completions")
-                .headers(headers -> headers.setBearerAuth(resolveApiKey(requestApiKey)))
+                .headers(headers -> {
+                    applyRequestHeaders(headers, requestHeaders);
+                    headers.setBearerAuth(resolveApiKey(requestApiKey));
+                })
                 .bodyValue(requestBody)
                 .retrieve()
                 .onStatus(status -> status.isError(), clientResponse -> {
@@ -153,6 +183,27 @@ public class OpenAIClient {
             return requestApiKey.trim();
         }
         return apiKey;
+    }
+
+    private void applyRequestHeaders(HttpHeaders headers, Map<String, String> requestHeaders) {
+        if (requestHeaders == null || requestHeaders.isEmpty()) {
+            return;
+        }
+        requestHeaders.forEach((name, value) -> {
+            if (isMutableRequestHeader(name, value)) {
+                headers.set(name.trim(), value.trim());
+            }
+        });
+    }
+
+    private boolean isMutableRequestHeader(String name, String value) {
+        if (name == null || name.isBlank() || value == null) {
+            return false;
+        }
+        String normalized = name.trim().toLowerCase();
+        return !normalized.equals("authorization")
+            && !normalized.equals("host")
+            && !normalized.equals("content-length");
     }
 
     /**

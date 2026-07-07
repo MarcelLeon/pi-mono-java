@@ -158,6 +158,34 @@ class AnthropicLLMProviderTest {
     }
 
     @Test
+    void chatPassesRequestScopedHeadersToClient() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "header answer"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic(), client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "claude-sonnet-5",
+                0.7,
+                1000,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("x-pi-trace-id", "trace-1")
+            )
+        );
+
+        provider.chat(request).join();
+
+        assertEquals(Map.of("x-pi-trace-id", "trace-1"), client.lastHeaders);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void chatSendsToolSchemasAndParsesToolUseBlocks() {
         StubAnthropicClient client = new StubAnthropicClient("""
@@ -372,6 +400,7 @@ class AnthropicLLMProviderTest {
         private final String response;
         private String lastApiKey;
         private List<Map<String, Object>> lastTools;
+        private Map<String, String> lastHeaders = Map.of();
         private List<Map<String, Object>> lastRichMessages = List.of();
 
         StubAnthropicClient(String response) {
@@ -414,6 +443,24 @@ class AnthropicLLMProviderTest {
         ) {
             this.lastApiKey = apiKey;
             this.lastTools = tools;
+            return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> createMessageWithContentParts(
+            String model,
+            List<Map<String, Object>> messages,
+            String system,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            String apiKey,
+            Map<String, String> headers
+        ) {
+            this.lastApiKey = apiKey;
+            this.lastTools = tools;
+            this.lastHeaders = headers;
+            this.lastRichMessages = messages;
             return Mono.just(response);
         }
 

@@ -96,6 +96,28 @@ public class AnthropicClient {
         List<Map<String, Object>> tools,
         String requestApiKey
     ) {
+        return createMessageWithContentParts(
+            model,
+            messages,
+            system,
+            temperature,
+            maxTokens,
+            tools,
+            requestApiKey,
+            Map.of()
+        );
+    }
+
+    public Mono<String> createMessageWithContentParts(
+        String model,
+        List<Map<String, Object>> messages,
+        String system,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        String requestApiKey,
+        Map<String, String> requestHeaders
+    ) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", model);
         requestBody.put("messages", messages);
@@ -116,6 +138,7 @@ public class AnthropicClient {
         return webClient.post()
             .uri("/messages")
             .headers(headers -> {
+                applyRequestHeaders(headers, requestHeaders);
                 if (requestApiKey != null && !requestApiKey.isBlank()) {
                     headers.set("x-api-key", requestApiKey.trim());
                 }
@@ -170,6 +193,28 @@ public class AnthropicClient {
             builder.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + authToken);
         }
         config.getResolvedCustomHeaders().forEach(builder::defaultHeader);
+    }
+
+    private static void applyRequestHeaders(HttpHeaders headers, Map<String, String> requestHeaders) {
+        if (requestHeaders == null || requestHeaders.isEmpty()) {
+            return;
+        }
+        requestHeaders.forEach((name, value) -> {
+            if (isMutableRequestHeader(name, value)) {
+                headers.set(name.trim(), value.trim());
+            }
+        });
+    }
+
+    private static boolean isMutableRequestHeader(String name, String value) {
+        if (name == null || name.isBlank() || value == null) {
+            return false;
+        }
+        String normalized = name.trim().toLowerCase();
+        return !normalized.equals("authorization")
+            && !normalized.equals("x-api-key")
+            && !normalized.equals("host")
+            && !normalized.equals("content-length");
     }
 
     public static class AnthropicException extends RuntimeException {

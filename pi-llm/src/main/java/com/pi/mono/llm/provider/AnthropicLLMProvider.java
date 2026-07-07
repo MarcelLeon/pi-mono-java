@@ -61,6 +61,7 @@ public class AnthropicLLMProvider implements LLMProvider {
             String system = systemPrompt(request.messages());
             String apiKey = resolveApiKey(options);
             List<Map<String, Object>> tools = options == null ? List.of() : options.tools();
+            Map<String, String> headers = options == null ? Map.of() : options.headers();
 
             String response = client.createMessageWithContentParts(
                     model,
@@ -69,7 +70,8 @@ public class AnthropicLLMProvider implements LLMProvider {
                     temperature,
                     maxTokens,
                     tools,
-                    apiKey
+                    apiKey,
+                    headers
                 )
                 .block(config.getTimeout());
             return CompletableFuture.completedFuture(parseMessageResponse(response, model));

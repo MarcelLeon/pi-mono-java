@@ -39,6 +39,23 @@ public class AgentSessionTest {
     }
 
     @Test
+    public void testChatOptionsNormalizesRequestHeaders() {
+        ChatOptions options = new ChatOptions(
+            "gpt-5.5",
+            0.2,
+            1024,
+            null,
+            null,
+            null,
+            Map.of("x-pi-trace-id", "trace-1")
+        );
+
+        assertEquals(Map.of(), options.env());
+        assertEquals(java.util.List.of(), options.tools());
+        assertEquals(Map.of("x-pi-trace-id", "trace-1"), options.headers());
+    }
+
+    @Test
     public void testSessionNodeCreation() {
         // Given
         AgentMessage message = new AgentMessage(

@@ -3,6 +3,8 @@ package com.pi.mono.llm.client;
 import com.pi.mono.llm.config.AnthropicConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 @Component
+@ConditionalOnProperty(name = "pi.llm.anthropic.enabled", havingValue = "true")
 public class AnthropicClient {
     private static final Logger log = LoggerFactory.getLogger(AnthropicClient.class);
     private static final String ANTHROPIC_VERSION = "2023-06-01";
@@ -22,21 +25,22 @@ public class AnthropicClient {
 
     private final WebClient webClient;
 
+    @Autowired
     public AnthropicClient(AnthropicConfig config) {
-        this(config, WebClient.builder()
+        WebClient.Builder builder = WebClient.builder()
             .baseUrl(config.getResolvedBaseUrl())
-            .defaultHeader("x-api-key", config.getApiKey() == null ? "" : config.getApiKey())
             .defaultHeader("anthropic-version", ANTHROPIC_VERSION)
-            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-            .build());
+            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+        applyAuthHeaders(builder, config);
+        this.webClient = builder.build();
     }
 
     AnthropicClient(AnthropicConfig config, WebClient webClient) {
-        this.webClient = webClient.mutate()
-            .defaultHeader("x-api-key", config.getApiKey() == null ? "" : config.getApiKey())
+        WebClient.Builder builder = webClient.mutate()
             .defaultHeader("anthropic-version", ANTHROPIC_VERSION)
-            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-            .build();
+            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+        applyAuthHeaders(builder, config);
+        this.webClient = builder.build();
     }
 
     public Mono<String> createMessage(
@@ -154,6 +158,18 @@ public class AnthropicClient {
         requestTool.put("description", tool.getOrDefault("description", ""));
         requestTool.put("input_schema", tool.getOrDefault("input_schema", Map.of("type", "object")));
         return requestTool;
+    }
+
+    private static void applyAuthHeaders(WebClient.Builder builder, AnthropicConfig config) {
+        String apiKey = config.getResolvedApiKey();
+        if (apiKey != null && !apiKey.isBlank()) {
+            builder.defaultHeader("x-api-key", apiKey);
+        }
+        String authToken = config.getResolvedAuthToken();
+        if (authToken != null && !authToken.isBlank()) {
+            builder.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + authToken);
+        }
+        config.getResolvedCustomHeaders().forEach(builder::defaultHeader);
     }
 
     public static class AnthropicException extends RuntimeException {

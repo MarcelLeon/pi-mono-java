@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -31,6 +32,7 @@ import java.util.regex.Pattern;
 public class AnthropicLLMProvider implements LLMProvider {
     private static final String PROVIDER_ID = "anthropic";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int CLAUDE_CONTEXT_TOKENS = 200000;
     private static final Pattern IMAGE_DATA_URL = Pattern.compile(
         "data:(image/[^;\\s<]+);base64,([A-Za-z0-9+/=]+)"
     );
@@ -77,15 +79,34 @@ public class AnthropicLLMProvider implements LLMProvider {
 
     @Override
     public List<Model> getAvailableModels() {
-        return List.of(
-            new Model(
-                "claude-sonnet-5",
-                PROVIDER_ID,
-                "Anthropic Claude Sonnet 5 with adaptive thinking",
-                200000,
-                costPerToken("0.003")
-            )
+        Map<String, Model> models = new LinkedHashMap<>();
+        addModel(
+            models,
+            "claude-sonnet-5",
+            "Anthropic Claude Sonnet 5 with adaptive thinking",
+            "0.003"
         );
+        addModel(
+            models,
+            "opus-4-7",
+            "Anthropic-compatible Claude Opus 4.7 alias",
+            "0.015"
+        );
+        addModel(
+            models,
+            "pa/claude-opus-4-7",
+            "Proxy-routed Claude Opus 4.7 model id",
+            "0.015"
+        );
+        if (config.getModel() != null && !config.getModel().isBlank()) {
+            addModel(
+                models,
+                config.getModel().trim(),
+                "Configured Anthropic-compatible model",
+                "0.003"
+            );
+        }
+        return List.copyOf(models.values());
     }
 
     @Override
@@ -99,7 +120,7 @@ public class AnthropicLLMProvider implements LLMProvider {
 
     @Override
     public HealthStatus health() {
-        return hasApiKey() ? HealthStatus.HEALTHY : HealthStatus.UNHEALTHY;
+        return hasCredentials() ? HealthStatus.HEALTHY : HealthStatus.UNHEALTHY;
     }
 
     @Override
@@ -117,8 +138,8 @@ public class AnthropicLLMProvider implements LLMProvider {
         return PROVIDER_ID + "-" + config.getModel();
     }
 
-    private boolean hasApiKey() {
-        return config.getApiKey() != null && !config.getApiKey().isBlank();
+    private boolean hasCredentials() {
+        return config.getResolvedApiKey() != null || config.getResolvedAuthToken() != null;
     }
 
     private String resolveModel(ChatOptions options) {
@@ -241,6 +262,9 @@ public class AnthropicLLMProvider implements LLMProvider {
         metadata.put("model", model);
         metadata.put("adaptiveThinking", supportsAdaptiveThinking(model));
         metadata.put("baseUrl", config.getResolvedBaseUrl());
+        if (root.has("model") && !root.path("model").asText().isBlank()) {
+            metadata.put("responseModel", root.path("model").asText());
+        }
         if (usage.has("input_tokens")) {
             metadata.put("inputTokens", usage.path("input_tokens").asInt());
         }
@@ -316,6 +340,19 @@ public class AnthropicLLMProvider implements LLMProvider {
 
     private boolean supportsAdaptiveThinking(String model) {
         return model != null && model.contains("sonnet-5");
+    }
+
+    private void addModel(Map<String, Model> models, String id, String description, String costPerThousandTokens) {
+        if (id == null || id.isBlank()) {
+            return;
+        }
+        models.putIfAbsent(id, new Model(
+            id,
+            PROVIDER_ID,
+            description,
+            CLAUDE_CONTEXT_TOKENS,
+            costPerToken(costPerThousandTokens)
+        ));
     }
 
     private BigDecimal costPerToken(String costPerThousandTokens) {

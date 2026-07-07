@@ -17,6 +17,7 @@ import com.pi.mono.llm.LLMProviderManager;
 import com.pi.mono.tools.ToolManager;
 import com.pi.mono.tools.ToolPermissionManager;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -56,6 +57,15 @@ public class PiCliApplication implements CommandLineRunner {
     private Path workingDirectory;
     private boolean trustedProject;
     private boolean ephemeralSession;
+
+    @Value("${pi.llm.default-model:${pi.mono.default-model:}}")
+    private String configuredDefaultModel;
+
+    @Value("${pi.llm.external-cli.enabled:false}")
+    private boolean externalCliEnabled;
+
+    @Value("${pi.llm.external-cli.model-id:external-cli}")
+    private String externalCliModelId;
 
     public static void main(String[] args) {
         SpringApplication.run(PiCliApplication.class, args);
@@ -131,7 +141,51 @@ public class PiCliApplication implements CommandLineRunner {
         }
     }
 
+    static String normalizeCommandAlias(String input) {
+        if (input == null) {
+            return "";
+        }
+        String trimmed = input.trim();
+        if (trimmed.equalsIgnoreCase("/help")) {
+            return "help";
+        }
+        if (trimmed.equalsIgnoreCase("/sessions")) {
+            return "sessions";
+        }
+        if (trimmed.equalsIgnoreCase("/tools")) {
+            return "tools";
+        }
+        if (trimmed.startsWith("/tool ")) {
+            return "tool " + trimmed.substring("/tool ".length()).trim();
+        }
+        if (trimmed.startsWith("/perm ")) {
+            return "perm " + trimmed.substring("/perm ".length()).trim();
+        }
+        if (trimmed.startsWith("/session new")) {
+            return "/new" + trimmed.substring("/session new".length());
+        }
+        if (trimmed.equalsIgnoreCase("/session list")) {
+            return "sessions";
+        }
+        return trimmed;
+    }
+
+    static String resolveStartupModel(
+        String configuredDefaultModel,
+        boolean externalCliEnabled,
+        String externalCliModelId
+    ) {
+        if (configuredDefaultModel != null && !configuredDefaultModel.isBlank()) {
+            return configuredDefaultModel.trim();
+        }
+        if (externalCliEnabled && externalCliModelId != null && !externalCliModelId.isBlank()) {
+            return externalCliModelId.trim();
+        }
+        return "mock-claude";
+    }
+
     private void handleCommand(String input) {
+        input = normalizeCommandAlias(input);
         if (input.equalsIgnoreCase("help")) {
             showHelp();
         } else if (input.equalsIgnoreCase("sessions")) {
@@ -187,16 +241,16 @@ public class PiCliApplication implements CommandLineRunner {
 
     private void showHelp() {
         System.out.println("\n📚 Available commands:");
-        System.out.println("  help              - Show this help message");
-        System.out.println("  sessions          - List all saved sessions");
-        System.out.println("  tools             - Show available tools");
-        System.out.println("  tool <name> <args> - Execute a tool");
-        System.out.println("  perm list         - List user permissions");
-        System.out.println("  perm add <perm>   - Add permission");
-        System.out.println("  perm remove <perm> - Remove permission");
-        System.out.println("  perm tool <tool>  - Show tool permissions");
+        System.out.println("  help, /help       - Show this help message");
+        System.out.println("  sessions, /sessions - List all saved sessions");
+        System.out.println("  tools, /tools     - Show available tools");
+        System.out.println("  tool, /tool <name> <args> - Execute a tool");
+        System.out.println("  perm, /perm list  - List user permissions");
+        System.out.println("  perm, /perm add <perm> - Add permission");
+        System.out.println("  perm, /perm remove <perm> - Remove permission");
+        System.out.println("  perm, /perm tool <tool> - Show tool permissions");
         System.out.println("  /save             - Save current session");
-        System.out.println("  /new <model>      - Create new session with model");
+        System.out.println("  /new <model>, /session new <model> - Create new session with model");
         System.out.println("  /session          - Show active session info");
         System.out.println("  /rename <name>    - Rename current session and emit session_info_changed");
         System.out.println("  /resume <id>      - Resume a saved session");
@@ -405,9 +459,10 @@ public class PiCliApplication implements CommandLineRunner {
     private String createStartupSession(PiCliStartupOptions startupOptions) {
         Map<String, Object> metadata = new HashMap<>(resourceMetadata());
         metadata.put("ephemeral", startupOptions.ephemeralSession());
+        String startupModel = resolveStartupModel(configuredDefaultModel, externalCliEnabled, externalCliModelId);
         return startupOptions.sessionId()
-            .map(sessionId -> sessionManager.createSessionWithId(sessionId, "mock-claude", metadata))
-            .orElseGet(() -> sessionManager.createSession("mock-claude", metadata));
+            .map(sessionId -> sessionManager.createSessionWithId(sessionId, startupModel, metadata))
+            .orElseGet(() -> sessionManager.createSession(startupModel, metadata));
     }
 
     private Map<String, Object> resourceMetadata() {
@@ -433,6 +488,8 @@ public class PiCliApplication implements CommandLineRunner {
         System.out.println("\n📌 Current session:");
         System.out.println("  Session ID: " + sessionId);
         System.out.println("  Ephemeral: " + ephemeralSession);
+        sessionManager.getCurrentSessionModel()
+            .ifPresent(model -> System.out.println("  Model: " + model));
         sessionManager.getCurrentSessionName()
             .ifPresent(name -> System.out.println("  Session name: " + name));
         System.out.println("  Current node: " + sessionManager.getCurrentBranchId());

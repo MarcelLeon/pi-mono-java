@@ -279,6 +279,15 @@ public class SessionPersistenceUnitTest {
     }
 
     @Test
+    void exposesCurrentSessionModel() {
+        SessionManager manager = newSessionManager(sessionPersistence);
+
+        manager.createSession("opus-4-7");
+
+        assertEquals("opus-4-7", manager.getCurrentSessionModel().orElseThrow());
+    }
+
+    @Test
     void createSessionWithExplicitIdUsesDeterministicSessionId() {
         SessionManager manager = newSessionManager(sessionPersistence);
 
@@ -414,6 +423,44 @@ public class SessionPersistenceUnitTest {
         assertEquals("toolu_weather_2", secondToolResult.metadata().get("toolCallId"));
     }
 
+    @Test
+    void sendMessageFailsToolCallsFromLengthTruncatedAssistantMessage() throws Exception {
+        SessionManager manager = newSessionManager(sessionPersistence);
+        TruncatedToolCallProvider provider = new TruncatedToolCallProvider();
+        CountingWeatherTool weatherTool = new CountingWeatherTool();
+        ToolManager toolManager = new ToolManager(List.of(weatherTool));
+        ReflectionTestUtils.setField(toolManager, "permissionManager", new ToolPermissionManager());
+        ReflectionTestUtils.setField(manager, "llmProviderManager", new LLMProviderManager(List.of(provider)));
+        ReflectionTestUtils.setField(manager, "toolManager", toolManager);
+
+        manager.createSession("mock-claude");
+
+        AgentMessage finalMessage = manager.sendMessage("Check a truncated tool call.").get();
+
+        assertEquals("Re-issued tool call can happen on the next turn.", finalMessage.content());
+        assertEquals(0, weatherTool.executions);
+        assertEquals(2, provider.requests.size());
+
+        List<AgentMessage> secondTurnMessages = provider.requests.get(1).messages();
+        AgentMessage toolResultMessage = secondTurnMessages.get(secondTurnMessages.size() - 1);
+        assertEquals(MessageRole.TOOL_RESULT, toolResultMessage.role());
+        assertEquals("toolu_truncated_1", toolResultMessage.metadata().get("toolCallId"));
+        assertEquals("weather", toolResultMessage.metadata().get("toolName"));
+        assertEquals(false, toolResultMessage.metadata().get("success"));
+        assertTrue(toolResultMessage.content().contains("output token limit"));
+
+        List<MessageRole> roles = manager.getSessionHistory().stream()
+            .map(node -> node.message().role())
+            .toList();
+        assertEquals(List.of(
+            MessageRole.SYSTEM,
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+            MessageRole.TOOL_RESULT,
+            MessageRole.ASSISTANT
+        ), roles);
+    }
+
     private SessionManager newSessionManager(SessionPersistence persistence) {
         SessionManager manager = new SessionManager();
         ReflectionTestUtils.setField(manager, "sessionTree", new SessionTree());
@@ -547,6 +594,65 @@ public class SessionPersistenceUnitTest {
         }
     }
 
+    private static final class TruncatedToolCallProvider implements LLMProvider {
+        private final List<ChatRequest> requests = new ArrayList<>();
+
+        @Override
+        public CompletableFuture<AgentMessage> chat(ChatRequest request) {
+            requests.add(request);
+            if (requests.size() == 1) {
+                return CompletableFuture.completedFuture(new AgentMessage(
+                    MessageRole.ASSISTANT,
+                    "The response was truncated while preparing a tool call.",
+                    Map.of(
+                        "finishReason", "length",
+                        "incomplete", true,
+                        "toolCalls", List.of(Map.of(
+                            "id", "toolu_truncated_1",
+                            "name", "weather",
+                            "arguments", Map.of("city", "Shang")
+                        ))
+                    )
+                ));
+            }
+            return CompletableFuture.completedFuture(new AgentMessage(
+                MessageRole.ASSISTANT,
+                "Re-issued tool call can happen on the next turn.",
+                Map.of()
+            ));
+        }
+
+        @Override
+        public List<Model> getAvailableModels() {
+            return List.of(new Model("mock-claude", "truncated", "Truncated model", 1000, BigDecimal.ZERO));
+        }
+
+        @Override
+        public ToolCallResult executeToolCall(ToolCall toolCall, List<AgentMessage> context) {
+            return new ToolCallResult(toolCall.name(), "unused", Map.of());
+        }
+
+        @Override
+        public HealthStatus health() {
+            return HealthStatus.HEALTHY;
+        }
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public BigDecimal getCostPerToken() {
+            return BigDecimal.ZERO;
+        }
+
+        @Override
+        public String getId() {
+            return "truncated";
+        }
+    }
+
     private static final class WeatherTool implements ToolDefinition {
         @Override
         public String getName() {
@@ -565,6 +671,33 @@ public class SessionPersistenceUnitTest {
 
         @Override
         public CompletableFuture<ToolExecutionResult> execute(ToolExecutionRequest request) {
+            return CompletableFuture.completedFuture(ToolExecutionResult.success(
+                request.arguments().get("city") + ": light rain"
+            ));
+        }
+    }
+
+    private static final class CountingWeatherTool implements ToolDefinition {
+        private int executions;
+
+        @Override
+        public String getName() {
+            return "weather";
+        }
+
+        @Override
+        public String getDescription() {
+            return "Reads weather for a city.";
+        }
+
+        @Override
+        public Map<String, ToolParameter> getParameters() {
+            return Map.of("city", new ToolParameter("string", "City name", true, null));
+        }
+
+        @Override
+        public CompletableFuture<ToolExecutionResult> execute(ToolExecutionRequest request) {
+            executions++;
             return CompletableFuture.completedFuture(ToolExecutionResult.success(
                 request.arguments().get("city") + ": light rain"
             ));

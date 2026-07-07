@@ -29,4 +29,28 @@ class PiCliStartupOptionsTest {
     void rejectsSessionIdWithoutValue() {
         assertThrows(IllegalArgumentException.class, () -> PiCliStartupOptions.parse("--session-id"));
     }
+
+    @Test
+    void resolvesConfiguredDefaultModelFirst() {
+        assertEquals(
+            "gpt-5.5",
+            PiCliApplication.resolveStartupModel("gpt-5.5", true, "opus-4-7")
+        );
+    }
+
+    @Test
+    void defaultsToExternalCliModelWhenExternalCliIsEnabled() {
+        assertEquals(
+            "opus-4-7",
+            PiCliApplication.resolveStartupModel("", true, "opus-4-7")
+        );
+    }
+
+    @Test
+    void fallsBackToMockModelWhenNoModelIsConfigured() {
+        assertEquals(
+            "mock-claude",
+            PiCliApplication.resolveStartupModel("", false, "opus-4-7")
+        );
+    }
 }

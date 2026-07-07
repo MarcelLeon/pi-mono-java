@@ -3,6 +3,8 @@ package com.pi.mono.llm.client;
 import com.pi.mono.llm.config.OpenAIConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,6 +21,7 @@ import java.util.regex.Pattern;
  * 专注于核心功能，避免复杂的类引用
  */
 @Component
+@ConditionalOnProperty(name = "pi.llm.openai.enabled", havingValue = "true", matchIfMissing = false)
 public class OpenAIClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAIClient.class);
@@ -33,6 +36,7 @@ public class OpenAIClient {
     private final String baseUrl;
     private final String apiKey;
 
+    @Autowired
     public OpenAIClient(OpenAIConfig config) {
         this.baseUrl = config.getResolvedBaseUrl();
         this.apiKey = config.getApiKey();

@@ -149,6 +149,37 @@ class AnthropicClientTest {
     }
 
     @Test
+    void writesAuthTokenAndCustomHeaders() {
+        AtomicReference<String> authorizationHeader = new AtomicReference<>();
+        AtomicReference<String> customHeader = new AtomicReference<>();
+        AnthropicConfig config = testConfig();
+        config.setAuthToken("auth-token");
+        config.setCustomHeaders("langfuse_session_id: session-1");
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                authorizationHeader.set(request.headers().getFirst(HttpHeaders.AUTHORIZATION));
+                customHeader.set(request.headers().getFirst("langfuse_session_id"));
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                    .build());
+            })
+            .build();
+        AnthropicClient client = new AnthropicClient(config, webClient);
+
+        client.createMessage(
+            "claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            "",
+            0.7,
+            1000
+        ).block();
+
+        assertEquals("Bearer auth-token", authorizationHeader.get());
+        assertEquals("session-1", customHeader.get());
+    }
+
+    @Test
     void writesToolSchemasIntoMessagesRequestBody() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         WebClient webClient = WebClient.builder()
@@ -297,6 +328,7 @@ class AnthropicClientTest {
 
     private AnthropicConfig testConfig() {
         AnthropicConfig config = new AnthropicConfig();
+        config.setBaseUrl("https://anthropic.test/v1");
         config.setApiKey("test-key");
         return config;
     }

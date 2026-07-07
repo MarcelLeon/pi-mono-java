@@ -36,12 +36,12 @@ Many teams run Java/Spring in production but want pi-mono’s lightweight agent 
 
 Reference upstream: [earendil-works/pi](https://github.com/earendil-works/pi)
 Latest checked release: `v0.80.3` (2026-06-30).
-Latest checked main branch also includes post-release coding-agent/AI fixes through 2026-07-06 such as OpenAI Responses max-output-token floor clamping, Cloudflare 524 retry classification, OpenAI Codex WebSocket connection rotation, DS4 context-overflow detection, split-turn compaction summary serialization, delayed Copilot device-code token polling, entry renderers, short session entry ids from generated id random tails, model metadata cleanup, stricter bash timeout validation, sequential question-tool execution metadata, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
+Latest checked main branch also includes post-release coding-agent/AI fixes through 2026-07-07 such as failing tool calls from length-truncated assistant messages, OpenAI Responses max-output-token floor clamping, Cloudflare 524 retry classification, OpenAI Codex WebSocket connection rotation, DS4 context-overflow detection, split-turn compaction summary serialization, delayed Copilot device-code token polling, entry renderers, short session entry ids from generated id random tails, model metadata cleanup, stricter bash timeout validation, sequential question-tool execution metadata, Bedrock Claude 5 prompt caching, and Codex SSE transport updates.
 
 | Area | Upstream TS (`pi-mono`) | This Java repo | Alignment |
 |---|---|---|---|
 | Core model/provider abstraction | `packages/ai`, `packages/agent` | `pi-core`, `pi-llm` (`gpt-5.5` default, model-resolution helpers, request-scoped OpenAI/Anthropic/Bedrock auth/options, Azure Foundry endpoint normalization, HTTP error response bodies, retryable provider errors, GitHub Copilot OAuth device-flow client foundation, OAuth device-code polling interval handling, OpenAI output-token floor clamping, OpenAI-compatible HTTP 524 retry classification, OpenAI-compatible DS4 context-overflow classification, OpenAI `image_url`, Anthropic image, and Bedrock image attachment content parts, OpenAI/Anthropic/Bedrock non-streaming tool-use metadata and provider-native tool-result blocks, Anthropic/Bedrock thinking content metadata, Anthropic Messages API with Claude 5 thinking, Anthropic-compatible + Bedrock Claude Sonnet 5 catalogs and SigV4-signed non-streaming Bedrock invoke payloads) | Partially aligned |
-| Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification, split-turn compaction summary serialization | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation, serialized split-turn summary orchestration) | Mostly aligned for Java use |
+| Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification, split-turn compaction summary serialization | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation, length-truncated assistant tool-call failure handling, serialized split-turn summary orchestration) | Mostly aligned for Java use |
 | Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, strict 1-60s bash timeout validation, sequential `executionMode` tool metadata, session-level multi-round tool-call execution into `TOOL_RESULT`) | Partially aligned |
 | CLI agent workflow | `packages/coding-agent` | `pi-cli` (`--no-session`, `--session-id`, `@file` attachment expansion, improved session/model/resource commands) | Partially aligned |
 | Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, prompt expansion, basic `/skill:name`) | Partially aligned |
@@ -82,6 +82,101 @@ mvn spring-boot:run
 cd ..
 printf "help\n/session\n/models\n/resources\nexit\n" | mvn -pl pi-cli -DskipTests exec:java
 ```
+
+CLI commands accept both the original bare forms and the slash aliases for common operator commands:
+- `help` or `/help`
+- `sessions` or `/sessions`
+- `tools` or `/tools`
+- `perm list` or `/perm list`
+- `tool read path=README.md` or `/tool read path=README.md`
+
+### Optional: dogfood through an external CLI
+
+The default local model is still `mock-claude`. To route a session through a local command such as Claude Code CLI or Codex CLI, enable the opt-in external CLI provider and create a session with `external-cli`:
+
+```bash
+mvn -pl pi-cli -DskipTests \
+  -Dpi.llm.external-cli.enabled=true \
+  -Dpi.llm.external-cli.command="claude -p" \
+  -Dpi.llm.external-cli.model-id=opus-4-7 \
+  exec:java
+```
+
+Codex CLI equivalent:
+
+```bash
+mvn -pl pi-cli -DskipTests \
+  -Dpi.llm.external-cli.enabled=true \
+  -Dpi.llm.external-cli.command="codex exec -" \
+  -Dpi.llm.external-cli.model-id=gpt-5 \
+  exec:java
+```
+
+When `pi.llm.default-model` is not set, enabling `external-cli` makes the startup session use `pi.llm.external-cli.model-id` as the model. For known local CLIs, Pi-Mono Java also passes that model to the child process:
+- `claude -p` becomes `claude -p --model <model-id>`
+- `codex exec -` becomes `codex exec -m <model-id> -`
+- other commands can use an explicit `{model}` placeholder, for example `custom-ai --model {model}`
+
+Inside the CLI:
+
+```text
+/models
+/session
+请基于 @README.md 总结这个项目给一个 Spring 团队的接入价值
+```
+
+The configured external command must read the prompt from stdin and write the final answer to stdout.
+
+### Optional: dogfood through the real Anthropic-compatible API
+
+To verify the Java provider path instead of shelling out to a local CLI, enable `pi.llm.anthropic` and keep `pi.llm.external-cli.enabled` unset or false. The provider can read the same Claude-compatible environment used by Claude Code CLI:
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `ANTHROPIC_CUSTOM_HEADERS`
+- `ANTHROPIC_API_KEY` for the official API-key flow
+
+API-mode CLI smoke:
+
+```bash
+source ~/.zshrc
+
+printf "/models\n/session\n请只回复一行：API_OK。\nexit\n" | \
+  mvn -q -pl pi-cli -DskipTests -Djava.version=17 \
+    -Dpi.llm.anthropic.enabled=true \
+    -Dpi.llm.default-model=opus-4-7 \
+    exec:java
+```
+
+Expected evidence:
+- `/models` shows `Provider: anthropic-claude-sonnet-5 (available=true)`.
+- `/models` lists `opus-4-7` and `pa/claude-opus-4-7`.
+- `/session` shows `Model: opus-4-7`.
+- The assistant replies with a real provider response instead of `mock` or `Provider error ... fallback`.
+- Debug logs may show `Received Anthropic message response`.
+
+There is also a live smoke test that is skipped unless explicitly enabled:
+
+```bash
+source ~/.zshrc
+mvn -q -pl pi-llm -Dtest=AnthropicLiveSmokeTest \
+  -Dpi.live.anthropic=true \
+  -Dpi.llm.anthropic.model=opus-4-7 \
+  -Djava.version=17 test
+```
+
+### Dogfood acceptance matrix
+
+| Mode | Purpose | Command flags | Expected proof | Failure signal |
+|---|---|---|---|---|
+| Real API provider | Verify Java/Spring harness owns the provider call | `-Dpi.llm.anthropic.enabled=true -Dpi.llm.default-model=opus-4-7` | `/models` lists `anthropic-*` as available; `/session` model is `opus-4-7`; answer is real API text such as `API_OK` | `Provider error ... fallback`, only `mock-*` models, or `/session` model is `mock-claude` |
+| External CLI bridge | Verify local Claude Code/Codex CLI delegation | `-Dpi.llm.external-cli.enabled=true -Dpi.llm.external-cli.command="claude -p" -Dpi.llm.external-cli.model-id=opus-4-7` | `/models` lists `Provider: external-cli`; `/session` model is `opus-4-7`; answer comes from local CLI stdout | `mock provider` answer, missing `external-cli`, or local CLI timeout/auth error |
+
+Current known gaps after these two dogfood paths:
+- Anthropic-compatible API streaming is still not implemented in Java; current smoke is non-streaming `/messages`.
+- Provider-native tool-use is parsed, but full multi-round tool execution against live Anthropic should get a dedicated live test.
+- Model catalog is pragmatic and proxy-aware; it is not yet auto-discovered from a provider model endpoint.
+- Java target is 21+, but local verification on this machine has mostly used `-Djava.version=17` as a compatibility smoke.
 
 Quickstart docs:
 - 中文: [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md)
@@ -128,6 +223,7 @@ Quickstart docs:
 - [x] Send Anthropic non-streaming tool schemas and parse `tool_use` blocks into assistant message metadata
 - [x] Mark exported Java tool schemas with sequential `executionMode`
 - [x] Execute non-streaming provider `toolCalls` through Java tools, append provider-native `TOOL_RESULT` payloads, and continue bounded multi-round provider turns
+- [x] Fail tool calls from length-truncated assistant messages with error `TOOL_RESULT` payloads and continue so the model can re-issue complete calls
 - [x] Send SigV4-signed non-streaming Bedrock Anthropic invoke requests, including Claude Sonnet 5 thinking and prompt-cache payload blocks, and parse text/usage/thinking responses
 - [x] Convert CLI image attachments into Bedrock non-streaming image content blocks
 - [x] Send Bedrock non-streaming tool schemas and parse `tool_use` blocks into assistant message metadata
@@ -142,7 +238,7 @@ Quickstart docs:
 ## Evidence (Benchmarks / Test Records)
 
 Latest local verification sample:
-- `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, `session_info_changed` rename event, sequential tool `executionMode` metadata, and bounded multi-round non-streaming tool-call execution/`TOOL_RESULT` continuation tests).
+- `mvn -pl pi-session -am test -Dtest=SessionPersistenceUnitTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (session save/restore/load/fork, nested usage/reasoning token metadata, invalid non-empty session overwrite protection, deterministic session id, `session_info_changed` rename event, sequential tool `executionMode` metadata, bounded multi-round non-streaming tool-call execution/`TOOL_RESULT` continuation, and length-truncated assistant tool-call failure tests).
 - `mvn -pl pi-session -am test -Dtest=SessionCompactionServiceTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (split-turn compaction summary requests are serialized before merging history and turn-prefix summaries).
 - `mvn -pl pi-tools -am test -Dtest=BashToolTest,ReadFileToolTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (bash timeout validation and BMP-to-PNG `read` tests).
 - `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (resource discovery tests).
@@ -181,6 +277,7 @@ Bedrock runtime credential notes:
 
 Known testing caveat:
 - This repo targets Java 21+. If the local machine only has JDK 17, use `-Djava.version=17` only as a compatibility smoke check, not as the canonical release gate.
+- `spring-test-example` is a standalone Maven project. On JDK 17, first install the current local snapshots with `mvn -pl pi-starter -am install -DskipTests -Djava.version=17`, then run `mvn -f spring-test-example/pom.xml test`.
 - On JDK 24+, you may still see Mockito attach warnings in test logs.  
   `spring-test-example` test resources already force a non-inline mock maker to keep `mvn test` runnable.
 

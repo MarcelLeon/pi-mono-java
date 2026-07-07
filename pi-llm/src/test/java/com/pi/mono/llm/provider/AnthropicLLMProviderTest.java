@@ -20,13 +20,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AnthropicLLMProviderTest {
 
     @Test
-    void catalogIncludesClaudeSonnet5WithAdaptiveThinkingDescription() {
+    void catalogIncludesClaudeSonnet5AndOpusAliases() {
         AnthropicConfig config = configuredAnthropic();
         AnthropicLLMProvider provider = new AnthropicLLMProvider(config);
 
         List<Model> models = provider.getAvailableModels();
 
         assertTrue(models.stream().map(Model::id).anyMatch("claude-sonnet-5"::equals));
+        assertTrue(models.stream().map(Model::id).anyMatch("opus-4-7"::equals));
+        assertTrue(models.stream().map(Model::id).anyMatch("pa/claude-opus-4-7"::equals));
         assertTrue(models.stream()
             .filter(model -> model.id().equals("claude-sonnet-5"))
             .findFirst()
@@ -36,8 +38,29 @@ class AnthropicLLMProviderTest {
     }
 
     @Test
+    void catalogIncludesConfiguredCompatibleModel() {
+        AnthropicConfig config = configuredAnthropic();
+        config.setModel("custom-claude-compatible");
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(config);
+
+        assertTrue(provider.getAvailableModels().stream()
+            .map(Model::id)
+            .anyMatch("custom-claude-compatible"::equals));
+    }
+
+    @Test
     void enabledProviderIsHealthyWhenApiKeyConfigured() {
         AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic());
+
+        assertEquals(HealthStatus.HEALTHY, provider.health());
+        assertTrue(provider.isAvailable());
+    }
+
+    @Test
+    void enabledProviderIsHealthyWhenAuthTokenConfigured() {
+        AnthropicConfig config = new AnthropicConfig();
+        config.setAuthToken("auth-token");
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(config);
 
         assertEquals(HealthStatus.HEALTHY, provider.health());
         assertTrue(provider.isAvailable());
@@ -68,6 +91,31 @@ class AnthropicLLMProviderTest {
         assertEquals(11, response.metadata().get("inputTokens"));
         assertEquals(7, response.metadata().get("outputTokens"));
     }
+
+    @Test
+    void chatPreservesResponseModelWhenProviderRewritesAlias() {
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(
+            configuredAnthropic(),
+            new StubAnthropicClient("""
+                {
+                  "model": "pa/claude-opus-4-7",
+                  "content": [{"type": "text", "text": "API_OK"}],
+                  "usage": {"input_tokens": 21, "output_tokens": 8}
+                }
+                """)
+        );
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions("opus-4-7", 0.7, 1000)
+        );
+
+        AgentMessage response = provider.chat(request).join();
+
+        assertEquals("opus-4-7", response.metadata().get("model"));
+        assertEquals("pa/claude-opus-4-7", response.metadata().get("responseModel"));
+    }
+
 
     @Test
     void chatPassesRequestScopedApiKeyToClient() {

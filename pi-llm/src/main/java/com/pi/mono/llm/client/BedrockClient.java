@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pi.mono.llm.config.BedrockConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -26,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 
 @Component
+@ConditionalOnProperty(name = "pi.llm.bedrock.enabled", havingValue = "true")
 public class BedrockClient {
     private static final Logger log = LoggerFactory.getLogger(BedrockClient.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -42,6 +45,7 @@ public class BedrockClient {
     private final WebClient webClient;
     private final Clock clock;
 
+    @Autowired
     public BedrockClient(BedrockConfig config) {
         this(config, WebClient.builder()
             .baseUrl(config.getRuntimeEndpoint())

@@ -23,6 +23,7 @@ mvn test
 mvn -pl pi-session -am test
 
 # Spring 集成示例
+mvn -pl pi-starter -am install -DskipTests
 mvn -f spring-test-example/pom.xml test
 mvn -f spring-test-example/pom.xml spring-boot:run
 
@@ -37,5 +38,6 @@ printf "help\nexit\n" | mvn -pl pi-cli -DskipTests exec:java
 - README 与 Quickstart 的命令可执行且与代码一致。
 
 ## 常见问题
+- `spring-test-example` 是独立 Maven 示例，依赖本地 `1.0.0-SNAPSHOT`。如果本地只有 JDK 17，请先执行 `mvn -pl pi-starter -am install -DskipTests -Djava.version=17`，再执行 `mvn -f spring-test-example/pom.xml test`。
 - JDK 24+ 下 Mockito 可能出现 attach 警告；当前测试资源已采用非 inline mock maker 以保证可运行。
 - 若 Spring 启动失败，请确认 `pi-starter` 在聚合构建中已编译，并优先使用 `spring-test-example` 复现。

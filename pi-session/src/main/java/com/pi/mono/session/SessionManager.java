@@ -129,15 +129,18 @@ public class SessionManager {
         if (llmProviderManager != null) {
             try {
                 var provider = llmProviderManager.getAvailableProvider(currentModel);
-                responseFuture = provider.chat(request).exceptionally(ex -> new AgentMessage(
-                    MessageRole.ASSISTANT,
-                    "Provider error, fallback response to: " + content,
-                    Map.of(
-                        "timestamp", System.currentTimeMillis(),
-                        "fallback", true,
-                        "error", ex.getMessage()
-                    )
-                ));
+                responseFuture = provider.chat(request).exceptionally(ex -> {
+                    String error = rootCauseMessage(ex);
+                    return new AgentMessage(
+                        MessageRole.ASSISTANT,
+                        "Provider error (" + error + "), fallback response to: " + content,
+                        Map.of(
+                            "timestamp", System.currentTimeMillis(),
+                            "fallback", true,
+                            "error", error
+                        )
+                    );
+                });
                 return responseFuture.thenCompose(responseMessage ->
                     appendResponseAndMaybeContinue(
                         userNode.id(),
@@ -184,7 +187,25 @@ public class SessionManager {
     ) {
         SessionNode assistantNode = sessionTree.createBranch(parentNodeId, responseMessage);
         List<ToolCall> toolCalls = extractToolCalls(responseMessage);
-        if (toolCalls.isEmpty() || toolManager == null || remainingToolRounds <= 0) {
+        if (toolCalls.isEmpty() || remainingToolRounds <= 0) {
+            return CompletableFuture.completedFuture(responseMessage);
+        }
+        if (isLengthTruncated(responseMessage)) {
+            CompletableFuture<SessionNode> lastFailedToolNodeFuture = CompletableFuture.completedFuture(assistantNode);
+            for (ToolCall toolCall : toolCalls) {
+                lastFailedToolNodeFuture = lastFailedToolNodeFuture.thenApply(parentNode ->
+                    appendToolResult(parentNode.id(), toolCall, truncatedToolCallFailure(toolCall))
+                );
+            }
+            return continueAfterToolResults(
+                lastFailedToolNodeFuture,
+                provider,
+                currentModel,
+                originalContent,
+                remainingToolRounds
+            );
+        }
+        if (toolManager == null) {
             return CompletableFuture.completedFuture(responseMessage);
         }
 
@@ -196,6 +217,22 @@ public class SessionManager {
             );
         }
 
+        return continueAfterToolResults(
+            lastToolNodeFuture,
+            provider,
+            currentModel,
+            originalContent,
+            remainingToolRounds
+        );
+    }
+
+    private CompletableFuture<AgentMessage> continueAfterToolResults(
+        CompletableFuture<SessionNode> lastToolNodeFuture,
+        LLMProvider provider,
+        String currentModel,
+        String originalContent,
+        int remainingToolRounds
+    ) {
         return lastToolNodeFuture.thenCompose(lastToolNode -> {
             List<AgentMessage> continuationMessages = sessionTree.getBranchPath(lastToolNode.id()).stream()
                 .map(SessionNode::message)
@@ -206,15 +243,18 @@ public class SessionManager {
                 new ChatOptions(currentModel, 0.7, 1000, null, Map.of(), toolSchemas())
             );
             return provider.chat(continuationRequest)
-                .exceptionally(ex -> new AgentMessage(
-                    MessageRole.ASSISTANT,
-                    "Provider error after tool call, fallback response to: " + originalContent,
-                    Map.of(
-                        "timestamp", System.currentTimeMillis(),
-                        "fallback", true,
-                        "error", ex.getMessage()
-                    )
-                ))
+                .exceptionally(ex -> {
+                    String error = rootCauseMessage(ex);
+                    return new AgentMessage(
+                        MessageRole.ASSISTANT,
+                        "Provider error after tool call (" + error + "), fallback response to: " + originalContent,
+                        Map.of(
+                            "timestamp", System.currentTimeMillis(),
+                            "fallback", true,
+                            "error", error
+                        )
+                    );
+                })
                 .thenCompose(finalResponse -> appendResponseAndMaybeContinue(
                     lastToolNode.id(),
                     finalResponse,
@@ -224,6 +264,33 @@ public class SessionManager {
                     remainingToolRounds - 1
                 ));
         });
+    }
+
+    private boolean isLengthTruncated(AgentMessage responseMessage) {
+        Map<String, Object> metadata = responseMessage.metadata();
+        Object finishReason = metadata.get("finishReason");
+        Object incomplete = metadata.get("incomplete");
+        return "length".equals(finishReason) || Boolean.TRUE.equals(incomplete);
+    }
+
+    private ToolExecutionResult truncatedToolCallFailure(ToolCall toolCall) {
+        return ToolExecutionResult.failure(
+            "Tool call \"" + toolCall.name() + "\" was not executed: the response hit the output token limit, "
+                + "so its arguments may be truncated. Re-issue the tool call with complete arguments.",
+            Map.of(
+                "incompleteAssistantMessage", true,
+                "failureReason", "output_token_limit"
+            )
+        );
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        return message == null || message.isBlank() ? cursor.getClass().getSimpleName() : message;
     }
 
     private SessionNode appendToolResult(String parentNodeId, ToolCall toolCall, ToolExecutionResult result) {
@@ -400,6 +467,14 @@ public class SessionManager {
             .map(metadata -> metadata.get("sessionName"))
             .map(String::valueOf)
             .filter(name -> !name.isBlank());
+    }
+
+    public Optional<String> getCurrentSessionModel() {
+        if (currentSessionId == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(sessionModelMap.get(currentSessionId))
+            .filter(model -> !model.isBlank());
     }
 
     public String getCurrentBranchId() {

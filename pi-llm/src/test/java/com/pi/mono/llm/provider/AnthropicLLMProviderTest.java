@@ -299,6 +299,38 @@ class AnthropicLLMProviderTest {
     }
 
     @Test
+    void chatUsesNoToolOutputPlaceholderForEmptyAnthropicToolResults() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "tool result received"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(configuredAnthropic(), client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.TOOL_RESULT,
+                "   ",
+                Map.of(
+                    "toolCallId", "toolu_empty_123",
+                    "success", true
+                )
+            )),
+            new ChatOptions("claude-sonnet-5", 0.7, 1000)
+        );
+
+        provider.chat(request).join();
+
+        List<?> parts = (List<?>) client.lastRichMessages.get(0).get("content");
+        Map<?, ?> toolResult = (Map<?, ?>) parts.get(0);
+        assertEquals("tool_result", toolResult.get("type"));
+        assertEquals("toolu_empty_123", toolResult.get("tool_use_id"));
+        assertEquals("(no tool output)", toolResult.get("content"));
+        assertEquals(false, toolResult.containsKey("is_error"));
+    }
+
+    @Test
     void chatMarksFailedToolResultsAsAnthropicErrors() {
         StubAnthropicClient client = new StubAnthropicClient("""
             {

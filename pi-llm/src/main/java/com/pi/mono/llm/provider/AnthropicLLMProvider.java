@@ -33,6 +33,7 @@ public class AnthropicLLMProvider implements LLMProvider {
     private static final String PROVIDER_ID = "anthropic";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int CLAUDE_CONTEXT_TOKENS = 200000;
+    private static final String NO_TOOL_OUTPUT = "(no tool output)";
     private static final Pattern IMAGE_DATA_URL = Pattern.compile(
         "data:(image/[^;\\s<]+);base64,([A-Za-z0-9+/=]+)"
     );
@@ -180,7 +181,7 @@ public class AnthropicLLMProvider implements LLMProvider {
     private Object toAnthropicContent(AgentMessage message) {
         String content = message.content() == null ? "" : message.content();
         if (message.role() == MessageRole.TOOL_RESULT) {
-            return List.of(toolResultBlock(message, content));
+            return List.of(toolResultBlock(message, toolResultContent(content)));
         }
         if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
             return content;
@@ -200,6 +201,10 @@ public class AnthropicLLMProvider implements LLMProvider {
             ));
         }
         return parts;
+    }
+
+    private String toolResultContent(String content) {
+        return content.isBlank() ? NO_TOOL_OUTPUT : content;
     }
 
     private Map<String, Object> toolResultBlock(AgentMessage message, String content) {

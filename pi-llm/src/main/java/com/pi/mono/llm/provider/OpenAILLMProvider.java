@@ -42,6 +42,7 @@ public class OpenAILLMProvider implements LLMProvider {
     private static final String OUTPUT_LENGTH_FINISH_REASON = "length";
     private static final String INCOMPLETE_RESPONSE_MESSAGE =
         "[Incomplete response: model stopped because it reached the output token limit.]";
+    private static final String NO_TOOL_OUTPUT = "(no tool output)";
     private static final Pattern IMAGE_DATA_URL = Pattern.compile("(data:image/[^\\s<]+;base64,[A-Za-z0-9+/=]+)");
 
     private final OpenAIClient openAIClient;
@@ -212,6 +213,9 @@ public class OpenAILLMProvider implements LLMProvider {
 
     private Object toOpenAIContent(AgentMessage message) {
         String content = message.content() == null ? "" : message.content();
+        if (message.role() == MessageRole.TOOL_RESULT) {
+            return toolResultContent(content);
+        }
         if (message.role() != MessageRole.USER || !content.contains("data:image/")) {
             return content;
         }
@@ -231,6 +235,10 @@ public class OpenAILLMProvider implements LLMProvider {
             "image_url", Map.of("url", imageUrl)
         )));
         return parts;
+    }
+
+    private String toolResultContent(String content) {
+        return content.isBlank() ? NO_TOOL_OUTPUT : content;
     }
 
     private List<String> imageDataUrls(String content) {

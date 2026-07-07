@@ -285,6 +285,35 @@ class BedrockLLMProviderTest {
     }
 
     @Test
+    void chatUsesNoToolOutputPlaceholderForEmptyBedrockToolResults() {
+        BedrockConfig config = new BedrockConfig();
+        config.setRegion("us-west-2");
+        StubBedrockClient client = new StubBedrockClient("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}");
+        BedrockLLMProvider provider = new BedrockLLMProvider(config, client);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.TOOL_RESULT,
+                "\n\t",
+                Map.of(
+                    "toolCallId", "toolu_bedrock_empty_123",
+                    "success", true
+                )
+            )),
+            new ChatOptions("anthropic.claude-sonnet-5", 0.7, 1000)
+        );
+
+        provider.chat(request).join();
+
+        List<?> parts = (List<?>) client.lastRichMessages.get(0).get("content");
+        Map<?, ?> toolResult = (Map<?, ?>) parts.get(0);
+        assertEquals("tool_result", toolResult.get("type"));
+        assertEquals("toolu_bedrock_empty_123", toolResult.get("tool_use_id"));
+        assertEquals("(no tool output)", toolResult.get("content"));
+        assertEquals(false, toolResult.containsKey("is_error"));
+    }
+
+    @Test
     void chatMarksFailedToolResultsAsBedrockErrors() {
         BedrockConfig config = new BedrockConfig();
         config.setRegion("us-west-2");

@@ -292,6 +292,39 @@ class OpenAILLMProviderTest {
         );
     }
 
+    @Test
+    void chatUsesNoToolOutputPlaceholderForEmptyOpenAIToolResults() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {"content": "tool result received"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            """);
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(
+                MessageRole.TOOL_RESULT,
+                "",
+                Map.of("toolCallId", "call_empty_1", "success", true)
+            )),
+            new ChatOptions("gpt-5.5", 0.2, 1024)
+        );
+
+        provider.chat(request).get();
+
+        Map<String, Object> toolMessage = client.lastRichMessages.get(0);
+        assertEquals("tool", toolMessage.get("role"));
+        assertEquals("call_empty_1", toolMessage.get("tool_call_id"));
+        assertEquals("(no tool output)", toolMessage.get("content"));
+    }
+
     private ChatRequest chatRequest() {
         return new ChatRequest(
             "session-1",

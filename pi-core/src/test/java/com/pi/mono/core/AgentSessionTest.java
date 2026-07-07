@@ -26,6 +26,19 @@ public class AgentSessionTest {
     }
 
     @Test
+    public void testAgentMessageNormalizesNullContentAndMetadata() {
+        AgentMessage message = new AgentMessage(
+            MessageRole.ASSISTANT,
+            null,
+            null
+        );
+
+        assertEquals(MessageRole.ASSISTANT, message.role());
+        assertEquals("", message.content());
+        assertEquals(Map.of(), message.metadata());
+    }
+
+    @Test
     public void testSessionNodeCreation() {
         // Given
         AgentMessage message = new AgentMessage(

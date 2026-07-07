@@ -10,8 +10,6 @@ import java.nio.file.Paths;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.HashMap;
-import java.util.List;
-import java.util.ArrayList;
 
 /**
  * 编辑文件工具
@@ -89,7 +87,7 @@ public class EditFileTool implements ToolDefinition {
                 if (replaceAll) {
                     newContent = content.replace(oldString, newString);
                 } else {
-                    newContent = content.replaceFirst(oldString.replace("\\", "\\\\").replace("$", "\\$"), newString);
+                    newContent = replaceFirstLiteral(content, oldString, newString);
                 }
 
                 Files.writeString(path, newContent);
@@ -122,5 +120,13 @@ public class EditFileTool implements ToolDefinition {
         }
 
         return diff.toString();
+    }
+
+    private String replaceFirstLiteral(String content, String oldString, String newString) {
+        int index = content.indexOf(oldString);
+        if (index < 0) {
+            return content;
+        }
+        return content.substring(0, index) + newString + content.substring(index + oldString.length());
     }
 }

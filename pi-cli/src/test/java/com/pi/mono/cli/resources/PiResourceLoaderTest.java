@@ -89,4 +89,62 @@ class PiResourceLoaderTest {
         assertTrue(resources.skills().stream().anyMatch(skill -> skill.name().equals("deploy")));
         assertTrue(resources.skills().stream().anyMatch(skill -> skill.name().equals("local")));
     }
+
+    @Test
+    void trustedProjectSettingsCanDisableLocalPromptAndSkillResources() throws Exception {
+        Path userHome = Files.createDirectory(tempDir.resolve("home"));
+        Path project = Files.createDirectory(tempDir.resolve("project"));
+        Files.createDirectories(project.resolve(".pi/prompts"));
+        Files.createDirectories(project.resolve(".pi/skills/deploy"));
+        Files.writeString(project.resolve(".pi/prompts/review.md"), "Review this code");
+        Files.writeString(project.resolve(".pi/skills/deploy/SKILL.md"), "# Deploy Skill");
+        Files.writeString(project.resolve(".pi/settings.json"), """
+            {
+              "prompts": ["-prompts/review.md"],
+              "skills": ["-skills/deploy/SKILL.md"]
+            }
+            """);
+
+        PiResources resources = new PiResourceLoader(userHome).load(project, true);
+
+        assertEquals(0, resources.promptTemplates().size());
+        assertEquals(0, resources.skills().size());
+    }
+
+    @Test
+    void trustedProjectSettingsCanDisableInheritedGlobalSkillResources() throws Exception {
+        Path userHome = Files.createDirectory(tempDir.resolve("home"));
+        Files.createDirectories(userHome.resolve(".pi/agent/skills/global"));
+        Files.writeString(userHome.resolve(".pi/agent/skills/global/SKILL.md"), "# Global Skill");
+        Path project = Files.createDirectory(tempDir.resolve("project"));
+        Files.createDirectories(project.resolve(".pi"));
+        Files.writeString(project.resolve(".pi/settings.json"), """
+            {
+              "skills": ["-skills/global/SKILL.md"]
+            }
+            """);
+
+        PiResources resources = new PiResourceLoader(userHome).load(project, true);
+
+        assertEquals(0, resources.skills().size());
+    }
+
+    @Test
+    void trustedProjectSettingsCanReenableInheritedGlobalSkillResources() throws Exception {
+        Path userHome = Files.createDirectory(tempDir.resolve("home"));
+        Files.createDirectories(userHome.resolve(".pi/agent/skills/global"));
+        Files.writeString(userHome.resolve(".pi/agent/skills/global/SKILL.md"), "# Global Skill");
+        Path project = Files.createDirectory(tempDir.resolve("project"));
+        Files.createDirectories(project.resolve(".pi"));
+        Files.writeString(project.resolve(".pi/settings.json"), """
+            {
+              "skills": ["-skills/global/SKILL.md", "+skills/global/SKILL.md"]
+            }
+            """);
+
+        PiResources resources = new PiResourceLoader(userHome).load(project, true);
+
+        assertEquals(1, resources.skills().size());
+        assertEquals("global", resources.skills().get(0).name());
+    }
 }

@@ -19,7 +19,7 @@ The latest checked upstream release adds Claude Sonnet 5 provider catalog suppor
 | Tool execution | `packages/coding-agent` built-ins | `pi-tools` | Partial | Java has read/write/edit/bash/find/grep/ls, permission categories, BMP-to-PNG `read` payloads, strict 1-60 second bash timeout validation, sequential `executionMode` metadata on exported tool schemas, and session-level multi-round execution of provider-returned `toolCalls` into `TOOL_RESULT` messages. It does not yet mirror extension-defined tools. |
 | CLI workflow | `packages/coding-agent` | `pi-cli` | Partial, improved | Java CLI now exposes `--no-session`, `--session-id`, `@file` attachment expansion, `/session`, `/rename`, `/resume`, `/tree`, `/fork`, `/export`, `/import`, `/models`, `/resources`, `/prompts`, `/skills`, and `/edit`. |
 | Context files | `packages/coding-agent` resource loader | `pi-cli` | Partial | Java loads `AGENTS.md` and `CLAUDE.md` from parent directories into startup/session metadata. |
-| Skills and prompt templates | `packages/coding-agent` resource loader | `pi-cli` | Partial | Java discovers user-global prompts/skills and trusted project-local `.pi/prompts/*.md`, `.pi/skills/*/SKILL.md`, and `.agents/skills/*/SKILL.md`; it expands simple `{{key}}` prompt templates and injects basic `/skill:name` instructions into CLI conversations, but does not execute extension-provided tools or the full Agent Skills lifecycle. |
+| Skills and prompt templates | `packages/coding-agent` resource loader | `pi-cli` | Partial | Java discovers user-global prompts/skills and trusted project-local `.pi/prompts/*.md`, `.pi/skills/*/SKILL.md`, and `.agents/skills/*/SKILL.md`; it applies trusted `.pi/settings.json` `prompts`/`skills` override patterns as a project-local config delta over local or inherited global resources; it expands simple `{{key}}` prompt templates and injects basic `/skill:name` instructions into CLI conversations, but does not execute extension-provided tools or the full Agent Skills lifecycle. |
 | CLI settings | `settings.json` | `pi-cli` | Partial | Java loads user-global and trusted project-local `.pi/settings.json`, applies `outputPad` to user/assistant/thinking lines, and supports configured `externalEditor` via `/edit`; it does not yet implement upstream's exact Ctrl+G/TUI keybinding workflow. |
 | Extensions, themes, packages | `packages/coding-agent` resource/package loader | Not implemented | Gap | Upstream can load executable extensions, themes, and Pi packages; Java only discovers local prompt/skill files. |
 | Project trust | `packages/coding-agent` trust manager | `pi-cli` | Partial | Java supports `/trust` and gates project-local prompt/skill resources. It does not yet model extension/package trust or interactive startup prompts. |
@@ -71,6 +71,7 @@ The latest checked upstream release adds Claude Sonnet 5 provider catalog suppor
 - Load `AGENTS.md`/`CLAUDE.md` context files from the project path.
 - Discover local prompt templates and skill manifests in Pi-compatible directories.
 - Save project trust decisions with `/trust` and reload project-local prompt/skill resources after trust.
+- Apply trusted `.pi/settings.json` `prompts` and `skills` arrays with `+`, `-`, or `!` entries to include or disable local prompt/skill resources, including project-local deltas over inherited global resources.
 - Load user-global and trusted project-local `.pi/settings.json`, apply `outputPad` to user/assistant/thinking lines, and show configured `externalEditor` with `/settings`.
 - Compose the next CLI message through `/edit` using configured `externalEditor`; commands can use `{file}` or receive the draft path as the final argument.
 - Expand trusted prompt templates with `/<template> key=value` and inject basic skill instructions with `/skill:<name> [request]`.
@@ -83,7 +84,7 @@ The latest checked upstream release adds Claude Sonnet 5 provider catalog suppor
 - Full Anthropic streaming tool-use behavior and provider-specific streaming tool-result orchestration.
 - Full Bedrock runtime parity, including streaming transport behavior beyond the tested SigV4-signed non-streaming thinking/prompt-cache block.
 - Upstream's TUI, keyboard workflow, message queue, compaction UI, and rich session browser.
-- Full Agent Skills execution lifecycle, extension-provided tools, themes, and Pi package installation.
+- Full Agent Skills execution lifecycle, extension-provided tools, themes, Pi package installation, and upstream's interactive `pi config` TUI selector.
 - Full project trust for executable extensions, package-managed code, and interactive startup prompts.
 - Full upstream external editor keybinding/TUI workflow.
 - Full GitHub Copilot credential persistence/provider integration beyond the tested minimal OAuth device-flow client, plus full automatic compaction integration beyond serialized split-turn summary orchestration.

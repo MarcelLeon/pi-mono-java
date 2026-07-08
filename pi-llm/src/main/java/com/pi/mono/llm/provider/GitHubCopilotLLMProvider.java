@@ -1,5 +1,6 @@
 package com.pi.mono.llm.provider;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pi.mono.core.AgentMessage;
@@ -341,13 +342,20 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             JsonNode choice = root.path("choices").path(0);
             JsonNode message = choice.path("message");
             String content = message.path("content").asText(null);
-            if (content == null) {
+            List<Map<String, Object>> toolCalls = parseToolCalls(message.path("tool_calls"));
+            if (content == null && toolCalls.isEmpty()) {
                 throw new RuntimeException("Invalid response from GitHub Copilot API");
+            }
+            if (content == null) {
+                content = "";
             }
             Map<String, Object> metadata = new HashMap<>();
             String finishReason = choice.path("finish_reason").asText(null);
             if (finishReason != null) {
                 metadata.put("finishReason", finishReason);
+            }
+            if (!toolCalls.isEmpty()) {
+                metadata.put("toolCalls", toolCalls);
             }
             Map<String, Object> usage = parseUsage(root.path("usage"));
             if (!usage.isEmpty()) {
@@ -356,6 +364,39 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             return new AgentMessage(MessageRole.ASSISTANT, content, metadata);
         } catch (Exception e) {
             throw new RuntimeException("Invalid response from GitHub Copilot API", e);
+        }
+    }
+
+    private List<Map<String, Object>> parseToolCalls(JsonNode toolCallsNode) {
+        if (toolCallsNode == null || !toolCallsNode.isArray()) {
+            return List.of();
+        }
+
+        List<Map<String, Object>> toolCalls = new java.util.ArrayList<>();
+        for (JsonNode toolCallNode : toolCallsNode) {
+            JsonNode functionNode = toolCallNode.path("function");
+            String name = functionNode.path("name").asText("");
+            if (name.isBlank()) {
+                continue;
+            }
+
+            Map<String, Object> toolCall = new HashMap<>();
+            toolCall.put("id", toolCallNode.path("id").asText(""));
+            toolCall.put("name", name);
+            toolCall.put("arguments", parseToolArguments(functionNode.path("arguments").asText("{}")));
+            toolCalls.add(toolCall);
+        }
+        return toolCalls;
+    }
+
+    private Map<String, Object> parseToolArguments(String argumentsJson) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(argumentsJson, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception ignored) {
+            return Map.of("raw", argumentsJson);
         }
     }
 

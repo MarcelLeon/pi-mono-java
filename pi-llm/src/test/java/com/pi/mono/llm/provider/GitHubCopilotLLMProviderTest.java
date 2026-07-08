@@ -150,6 +150,48 @@ class GitHubCopilotLLMProviderTest {
     }
 
     @Test
+    void parsesCopilotToolCallsIntoUnifiedMetadata() {
+        Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
+        saveToken(
+            credentialsFile,
+            "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;",
+            Map.of("access_token", "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;")
+        );
+        FakeCopilotChatTransport transport = new FakeCopilotChatTransport();
+        transport.response = """
+            {"choices":[{"message":{"content":null,"tool_calls":[
+              {"id":"call_read_1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"README.md\\"}"}}
+            ]},"finish_reason":"tool_calls"}],
+             "usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}
+            """;
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            enabledConfig(credentialsFile),
+            new GitHubCopilotCredentialStore(credentialsFile),
+            transport
+        );
+
+        AgentMessage response = provider.chat(new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "read README", Map.of())),
+            new ChatOptions("github-copilot", 0.2, 1024)
+        )).join();
+
+        assertEquals("", response.content());
+        assertEquals("tool_calls", response.metadata().get("finishReason"));
+        assertEquals(Map.of("inputTokens", 7L, "outputTokens", 3L, "totalTokens", 10L), response.metadata().get("usage"));
+
+        Object toolCallsValue = response.metadata().get("toolCalls");
+        assertTrue(toolCallsValue instanceof List<?>);
+        List<?> toolCalls = (List<?>) toolCallsValue;
+        assertEquals(1, toolCalls.size());
+        assertTrue(toolCalls.get(0) instanceof Map<?, ?>);
+        Map<?, ?> toolCall = (Map<?, ?>) toolCalls.get(0);
+        assertEquals("call_read_1", toolCall.get("id"));
+        assertEquals("read_file", toolCall.get("name"));
+        assertEquals(Map.of("path", "README.md"), toolCall.get("arguments"));
+    }
+
+    @Test
     void refreshesExpiredCopilotApiTokenBeforeChatAndPersistsReplacement() {
         Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
         String expiredToken = "tid=old;exp=1;proxy-ep=proxy.old.githubcopilot.com;";

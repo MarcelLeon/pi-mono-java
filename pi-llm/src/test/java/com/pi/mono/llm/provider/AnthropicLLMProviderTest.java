@@ -186,6 +186,50 @@ class AnthropicLLMProviderTest {
     }
 
     @Test
+    void chatMergesProviderHeaderContributorsBeforeSendingRequest() {
+        StubAnthropicClient client = new StubAnthropicClient("""
+            {
+              "content": [{"type": "text", "text": "hook header answer"}],
+              "usage": {"input_tokens": 1, "output_tokens": 1}
+            }
+            """);
+        ProviderHeaderContributor contributor = (request, providerId, model) -> Map.of(
+            "x-provider-id", providerId,
+            "x-model-id", model,
+            "x-session-id", request.sessionId(),
+            "x-shared", "hook"
+        );
+        AnthropicLLMProvider provider = new AnthropicLLMProvider(
+            configuredAnthropic(),
+            client,
+            List.of(contributor)
+        );
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "claude-sonnet-5",
+                0.7,
+                1000,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("x-request-id", "request-1", "x-shared", "request")
+            )
+        );
+
+        provider.chat(request).join();
+
+        assertEquals(Map.of(
+            "x-provider-id", "anthropic-claude-sonnet-5",
+            "x-model-id", "claude-sonnet-5",
+            "x-session-id", "session-1",
+            "x-request-id", "request-1",
+            "x-shared", "request"
+        ), client.lastHeaders);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void chatSendsToolSchemasAndParsesToolUseBlocks() {
         StubAnthropicClient client = new StubAnthropicClient("""

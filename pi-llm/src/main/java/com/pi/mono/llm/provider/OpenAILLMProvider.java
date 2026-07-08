@@ -47,12 +47,22 @@ public class OpenAILLMProvider implements LLMProvider {
 
     private final OpenAIClient openAIClient;
     private final OpenAIConfig config;
+    private final List<ProviderHeaderContributor> headerContributors;
 
     @Autowired
-    public OpenAILLMProvider(OpenAIClient openAIClient, OpenAIConfig config) {
+    public OpenAILLMProvider(
+        OpenAIClient openAIClient,
+        OpenAIConfig config,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
         this.openAIClient = openAIClient;
         this.config = config;
+        this.headerContributors = headerContributors == null ? List.of() : List.copyOf(headerContributors);
         log.info("OpenAI LLM Provider initialized with model: {}", config.getModel());
+    }
+
+    public OpenAILLMProvider(OpenAIClient openAIClient, OpenAIConfig config) {
+        this(openAIClient, config, List.of());
     }
 
     @Override
@@ -69,7 +79,7 @@ public class OpenAILLMProvider implements LLMProvider {
             int maxTokens = options != null && options.maxTokens() > 0 ? options.maxTokens() : 1000;
             String apiKey = resolveApiKey(options);
             List<Map<String, Object>> tools = options != null ? options.tools() : List.of();
-            Map<String, String> headers = options != null ? options.headers() : Map.of();
+            Map<String, String> headers = resolveHeaders(request, model, options);
 
             // 发送请求 - 使用简化接口
             var responseMono = openAIClient.createChatCompletionWithContentParts(
@@ -286,6 +296,20 @@ public class OpenAILLMProvider implements LLMProvider {
             return envApiKey.trim();
         }
         return null;
+    }
+
+    private Map<String, String> resolveHeaders(ChatRequest request, String model, ChatOptions options) {
+        Map<String, String> headers = new HashMap<>();
+        for (ProviderHeaderContributor contributor : headerContributors) {
+            Map<String, String> contributed = contributor.contributeHeaders(request, getId(), model);
+            if (contributed != null) {
+                headers.putAll(contributed);
+            }
+        }
+        if (options != null) {
+            headers.putAll(options.headers());
+        }
+        return Map.copyOf(headers);
     }
 
     private AgentMessage parseChatCompletion(String response) {

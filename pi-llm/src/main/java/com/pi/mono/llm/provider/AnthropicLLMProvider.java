@@ -39,15 +39,25 @@ public class AnthropicLLMProvider implements LLMProvider {
     );
     private final AnthropicConfig config;
     private final AnthropicClient client;
+    private final List<ProviderHeaderContributor> headerContributors;
 
     @Autowired
-    public AnthropicLLMProvider(AnthropicConfig config, AnthropicClient client) {
+    public AnthropicLLMProvider(
+        AnthropicConfig config,
+        AnthropicClient client,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
         this.config = config;
         this.client = client;
+        this.headerContributors = headerContributors == null ? List.of() : List.copyOf(headerContributors);
+    }
+
+    public AnthropicLLMProvider(AnthropicConfig config, AnthropicClient client) {
+        this(config, client, List.of());
     }
 
     public AnthropicLLMProvider(AnthropicConfig config) {
-        this(config, new AnthropicClient(config));
+        this(config, new AnthropicClient(config), List.of());
     }
 
     @Override
@@ -61,7 +71,7 @@ public class AnthropicLLMProvider implements LLMProvider {
             String system = systemPrompt(request.messages());
             String apiKey = resolveApiKey(options);
             List<Map<String, Object>> tools = options == null ? List.of() : options.tools();
-            Map<String, String> headers = options == null ? Map.of() : options.headers();
+            Map<String, String> headers = resolveHeaders(request, model, options);
 
             String response = client.createMessageWithContentParts(
                     model,
@@ -164,6 +174,20 @@ public class AnthropicLLMProvider implements LLMProvider {
             return envApiKey.trim();
         }
         return null;
+    }
+
+    private Map<String, String> resolveHeaders(ChatRequest request, String model, ChatOptions options) {
+        Map<String, String> headers = new HashMap<>();
+        for (ProviderHeaderContributor contributor : headerContributors) {
+            Map<String, String> contributed = contributor.contributeHeaders(request, getId(), model);
+            if (contributed != null) {
+                headers.putAll(contributed);
+            }
+        }
+        if (options != null) {
+            headers.putAll(options.headers());
+        }
+        return Map.copyOf(headers);
     }
 
     private List<Map<String, Object>> toAnthropicMessages(List<AgentMessage> messages) {

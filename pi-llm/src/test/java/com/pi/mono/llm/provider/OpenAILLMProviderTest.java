@@ -230,6 +230,52 @@ class OpenAILLMProviderTest {
     }
 
     @Test
+    void chatMergesProviderHeaderContributorsBeforeSendingRequest() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {"content": "hook header answer"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            """);
+        ProviderHeaderContributor contributor = (request, providerId, model) -> Map.of(
+            "x-provider-id", providerId,
+            "x-model-id", model,
+            "x-session-id", request.sessionId(),
+            "x-shared", "hook"
+        );
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config, List.of(contributor));
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "gpt-5.5",
+                0.2,
+                1024,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("x-request-id", "request-1", "x-shared", "request")
+            )
+        );
+
+        provider.chat(request).get();
+
+        assertEquals(Map.of(
+            "x-provider-id", "openai-gpt-5.5",
+            "x-model-id", "gpt-5.5",
+            "x-session-id", "session-1",
+            "x-request-id", "request-1",
+            "x-shared", "request"
+        ), client.lastHeaders);
+    }
+
+    @Test
     void chatSendsToolSchemasAndParsesToolCalls() throws Exception {
         OpenAIConfig config = new OpenAIConfig();
         config.setApiKey("configured-key");

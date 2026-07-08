@@ -116,6 +116,27 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
 
     @Override
     public List<Model> getAvailableModels() {
+        if (isAvailable()) {
+            try {
+                GitHubCopilotOAuthClient.AccessToken token = tokenStore.load()
+                    .filter(accessToken -> !accessToken.accessToken().isBlank())
+                    .map(this::refreshIfExpired)
+                    .orElseThrow(() -> new IllegalStateException("GitHub Copilot credentials are not available."));
+                List<Model> accountModels = parseModels(chatTransport.models(
+                    baseUrl(token.accessToken()),
+                    token.accessToken()
+                ));
+                if (!accountModels.isEmpty()) {
+                    return accountModels;
+                }
+            } catch (RuntimeException e) {
+                // Fall through to the configured model so model listing remains usable offline.
+            }
+        }
+        return fallbackModels();
+    }
+
+    private List<Model> fallbackModels() {
         return List.of(new Model(
             config.getResolvedModel(),
             getId(),
@@ -123,6 +144,39 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             200000,
             BigDecimal.ZERO
         ));
+    }
+
+    private List<Model> parseModels(String response) {
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(response);
+            JsonNode models = root.path("data").isArray() ? root.path("data") : root.path("models");
+            if (!models.isArray()) {
+                return List.of();
+            }
+            return java.util.stream.StreamSupport.stream(models.spliterator(), false)
+                .map(this::toModel)
+                .flatMap(Optional::stream)
+                .toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private Optional<Model> toModel(JsonNode node) {
+        String id = node.path("id").asText("").trim();
+        if (id.isBlank()) {
+            return Optional.empty();
+        }
+        String description = node.path("name").asText("").trim();
+        if (description.isBlank()) {
+            description = id;
+        }
+        int maxTokens = intValue(node.path("context_window"), intValue(node.path("max_input_tokens"), 200000));
+        return Optional.of(new Model(id, getId(), description, maxTokens, BigDecimal.ZERO));
+    }
+
+    private int intValue(JsonNode node, int defaultValue) {
+        return node != null && node.canConvertToInt() && node.asInt() > 0 ? node.asInt() : defaultValue;
     }
 
     @Override
@@ -334,6 +388,10 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             List<Map<String, Object>> tools,
             Map<String, String> headers
         );
+
+        default String models(String baseUrl, String accessToken) {
+            throw new UnsupportedOperationException("GitHub Copilot model discovery is not supported by this transport");
+        }
     }
 
     interface CopilotTokenRefresher {
@@ -396,6 +454,24 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
                     httpHeaders.set("X-GitHub-Api-Version", "2026-06-01");
                 })
                 .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block(Duration.ofSeconds(30));
+        }
+
+        @Override
+        public String models(String baseUrl, String accessToken) {
+            return webClient.get()
+                .uri(baseUrl + "/models")
+                .accept(MediaType.APPLICATION_JSON)
+                .headers(httpHeaders -> {
+                    httpHeaders.setBearerAuth(accessToken);
+                    httpHeaders.set(HttpHeaders.USER_AGENT, "GitHubCopilotChat/0.35.0");
+                    httpHeaders.set("Editor-Version", "vscode/1.107.0");
+                    httpHeaders.set("Editor-Plugin-Version", "copilot-chat/0.35.0");
+                    httpHeaders.set("Copilot-Integration-Id", "vscode-chat");
+                    httpHeaders.set("X-GitHub-Api-Version", "2026-06-01");
+                })
                 .retrieve()
                 .bodyToMono(String.class)
                 .block(Duration.ofSeconds(30));

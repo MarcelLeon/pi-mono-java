@@ -48,13 +48,48 @@ class GitHubCopilotLLMProviderTest {
         saveToken(credentialsFile);
         GitHubCopilotConfig config = enabledConfig(credentialsFile);
 
-        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(config);
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            config,
+            new GitHubCopilotCredentialStore(credentialsFile),
+            new FakeCopilotChatTransport()
+        );
 
         assertTrue(provider.isAvailable());
         assertEquals(HealthStatus.HEALTHY, provider.health());
         assertEquals("github-copilot", provider.getId());
         assertEquals(List.of("github-copilot"), provider.getAvailableModels().stream().map(Model::id).toList());
         assertEquals(BigDecimal.ZERO, provider.getCostPerToken());
+    }
+
+    @Test
+    void exposesAccountSpecificCopilotModelsWhenModelEndpointIsAvailable() {
+        Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
+        saveToken(
+            credentialsFile,
+            "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;",
+            Map.of("access_token", "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;")
+        );
+        FakeCopilotChatTransport transport = new FakeCopilotChatTransport();
+        transport.modelsResponse = """
+            {"data":[
+              {"id":"gpt-5.5-copilot","name":"GPT 5.5 Copilot","context_window":200000},
+              {"id":"claude-sonnet-5-copilot","max_input_tokens":180000}
+            ]}
+            """;
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            enabledConfig(credentialsFile),
+            new GitHubCopilotCredentialStore(credentialsFile),
+            transport
+        );
+
+        List<Model> models = provider.getAvailableModels();
+
+        assertEquals(List.of("gpt-5.5-copilot", "claude-sonnet-5-copilot"), models.stream().map(Model::id).toList());
+        assertEquals(List.of("github-copilot", "github-copilot"), models.stream().map(Model::provider).toList());
+        assertEquals(200000, models.get(0).maxTokens());
+        assertEquals(180000, models.get(1).maxTokens());
+        assertEquals("https://api.individual.githubcopilot.com", transport.modelRequests.get(0).baseUrl());
+        assertEquals("tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;", transport.modelRequests.get(0).accessToken());
     }
 
     @Test
@@ -186,7 +221,9 @@ class GitHubCopilotLLMProviderTest {
 
     static class FakeCopilotChatTransport implements GitHubCopilotLLMProvider.CopilotChatTransport {
         private final List<Request> requests = new ArrayList<>();
+        private final List<ModelRequest> modelRequests = new ArrayList<>();
         private String response;
+        private String modelsResponse;
 
         @Override
         public String chat(
@@ -212,6 +249,12 @@ class GitHubCopilotLLMProviderTest {
             return response;
         }
 
+        @Override
+        public String models(String baseUrl, String accessToken) {
+            modelRequests.add(new ModelRequest(baseUrl, accessToken));
+            return modelsResponse;
+        }
+
         record Request(
             String baseUrl,
             String accessToken,
@@ -222,6 +265,9 @@ class GitHubCopilotLLMProviderTest {
             List<Map<String, Object>> tools,
             Map<String, String> headers
         ) {
+        }
+
+        record ModelRequest(String baseUrl, String accessToken) {
         }
     }
 

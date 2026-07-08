@@ -364,6 +364,43 @@ class BedrockClientTest {
     }
 
     @Test
+    void appliesAdditionalHeadersWithoutOverridingProviderManagedHeaders() {
+        BedrockConfig config = testConfig();
+        config.setAccessKeyId("AKIDEXAMPLE");
+        config.setSecretAccessKey("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY");
+        AtomicReference<HttpHeaders> headers = new AtomicReference<>();
+        WebClient webClient = WebClient.builder()
+            .baseUrl(config.getRuntimeEndpoint())
+            .exchangeFunction(request -> {
+                headers.set(request.headers());
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                    .build());
+            })
+            .build();
+        BedrockClient client = new BedrockClient(config, webClient);
+
+        client.createMessageWithContentBlocks(
+            "anthropic.claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            "",
+            0.7,
+            1000,
+            List.of(),
+            null,
+            Map.of(
+                "x-pi-trace-id", "trace-1",
+                HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE
+            )
+        ).block();
+
+        assertEquals("trace-1", headers.get().getFirst("x-pi-trace-id"));
+        assertEquals(MediaType.APPLICATION_JSON_VALUE, headers.get().getFirst(HttpHeaders.CONTENT_TYPE));
+        assertTrue(headers.get().getFirst(HttpHeaders.AUTHORIZATION).startsWith("AWS4-HMAC-SHA256 "));
+    }
+
+    @Test
     void includesResponseBodyInHttpErrors() {
         WebClient webClient = WebClient.builder()
             .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.FORBIDDEN)

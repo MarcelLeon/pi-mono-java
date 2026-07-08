@@ -113,7 +113,8 @@ public class BedrockClient {
             temperature,
             maxTokens,
             List.of(),
-            requestCredentials
+            requestCredentials,
+            Map.of()
         );
     }
 
@@ -125,6 +126,28 @@ public class BedrockClient {
         int maxTokens,
         List<Map<String, Object>> tools,
         BedrockConfig.Credentials requestCredentials
+    ) {
+        return createMessageWithContentBlocks(
+            model,
+            messages,
+            system,
+            temperature,
+            maxTokens,
+            tools,
+            requestCredentials,
+            Map.of()
+        );
+    }
+
+    public Mono<String> createMessageWithContentBlocks(
+        String model,
+        List<Map<String, Object>> messages,
+        String system,
+        double temperature,
+        int maxTokens,
+        List<Map<String, Object>> tools,
+        BedrockConfig.Credentials requestCredentials,
+        Map<String, String> headers
     ) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("anthropic_version", ANTHROPIC_VERSION);
@@ -153,7 +176,12 @@ public class BedrockClient {
 
         return webClient.post()
             .uri(path)
-            .headers(headers -> signingHeaders.forEach(headers::set))
+            .headers(httpHeaders -> {
+                if (headers != null) {
+                    headers.forEach(httpHeaders::set);
+                }
+                signingHeaders.forEach(httpHeaders::set);
+            })
             .bodyValue(requestJson)
             .retrieve()
             .onStatus(HttpStatusCode::isError, clientResponse -> {

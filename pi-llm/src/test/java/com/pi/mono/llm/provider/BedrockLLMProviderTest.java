@@ -146,6 +146,43 @@ class BedrockLLMProviderTest {
     }
 
     @Test
+    void chatMergesProviderHeaderContributorsBeforeSendingRequest() {
+        BedrockConfig config = new BedrockConfig();
+        config.setRegion("us-west-2");
+        StubBedrockClient client = new StubBedrockClient("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}");
+        ProviderHeaderContributor contributor = (request, providerId, model) -> Map.of(
+            "x-provider-id", providerId,
+            "x-model-id", model,
+            "x-session-id", request.sessionId(),
+            "x-shared", "hook"
+        );
+        BedrockLLMProvider provider = new BedrockLLMProvider(config, client, List.of(contributor));
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "anthropic.claude-sonnet-5",
+                0.7,
+                1000,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("x-request-id", "request-1", "x-shared", "request")
+            )
+        );
+
+        provider.chat(request).join();
+
+        assertEquals(Map.of(
+            "x-provider-id", "bedrock-anthropic.claude-sonnet-5-us-west-2",
+            "x-model-id", "anthropic.claude-sonnet-5",
+            "x-session-id", "session-1",
+            "x-request-id", "request-1",
+            "x-shared", "request"
+        ), client.lastHeaders);
+    }
+
+    @Test
     void chatConvertsImageAttachmentsToBedrockContentBlocks() {
         BedrockConfig config = new BedrockConfig();
         config.setRegion("us-west-2");
@@ -347,6 +384,7 @@ class BedrockLLMProviderTest {
         private BedrockConfig.Credentials lastCredentials;
         private List<Map<String, Object>> lastRichMessages = List.of();
         private List<Map<String, Object>> lastTools = List.of();
+        private Map<String, String> lastHeaders = Map.of();
 
         StubBedrockClient(String response) {
             super(new BedrockConfig());
@@ -375,6 +413,29 @@ class BedrockLLMProviderTest {
         ) {
             this.lastCredentials = requestCredentials;
             return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> createMessageWithContentBlocks(
+            String model,
+            List<Map<String, Object>> messages,
+            String system,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            BedrockConfig.Credentials requestCredentials,
+            Map<String, String> headers
+        ) {
+            this.lastHeaders = headers;
+            return createMessageWithContentBlocks(
+                model,
+                messages,
+                system,
+                temperature,
+                maxTokens,
+                tools,
+                requestCredentials
+            );
         }
 
         @Override

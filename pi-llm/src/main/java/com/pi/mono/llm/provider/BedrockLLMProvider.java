@@ -37,15 +37,25 @@ public class BedrockLLMProvider implements LLMProvider {
     );
     private final BedrockConfig config;
     private final BedrockClient client;
+    private final List<ProviderHeaderContributor> headerContributors;
 
     @Autowired
-    public BedrockLLMProvider(BedrockConfig config, BedrockClient client) {
+    public BedrockLLMProvider(
+        BedrockConfig config,
+        BedrockClient client,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
         this.config = config;
         this.client = client;
+        this.headerContributors = headerContributors == null ? List.of() : List.copyOf(headerContributors);
+    }
+
+    public BedrockLLMProvider(BedrockConfig config, BedrockClient client) {
+        this(config, client, List.of());
     }
 
     public BedrockLLMProvider(BedrockConfig config) {
-        this(config, new BedrockClient(config));
+        this(config, new BedrockClient(config), List.of());
     }
 
     @Override
@@ -59,6 +69,7 @@ public class BedrockLLMProvider implements LLMProvider {
             String system = systemPrompt(request.messages());
             BedrockConfig.Credentials requestCredentials = resolveCredentials(options);
             List<Map<String, Object>> tools = options == null ? List.of() : options.tools();
+            Map<String, String> headers = resolveHeaders(request, model, options);
 
             String response = client.createMessageWithContentBlocks(
                 model,
@@ -67,7 +78,8 @@ public class BedrockLLMProvider implements LLMProvider {
                 temperature,
                 maxTokens,
                 tools,
-                requestCredentials
+                requestCredentials,
+                headers
             ).block();
             return CompletableFuture.completedFuture(parseMessageResponse(response, model));
         } catch (Exception e) {
@@ -127,6 +139,20 @@ public class BedrockLLMProvider implements LLMProvider {
             return options.model();
         }
         return config.getModel();
+    }
+
+    private Map<String, String> resolveHeaders(ChatRequest request, String model, ChatOptions options) {
+        Map<String, String> headers = new HashMap<>();
+        for (ProviderHeaderContributor contributor : headerContributors) {
+            Map<String, String> contributed = contributor.contributeHeaders(request, getId(), model);
+            if (contributed != null) {
+                headers.putAll(contributed);
+            }
+        }
+        if (options != null) {
+            headers.putAll(options.headers());
+        }
+        return Map.copyOf(headers);
     }
 
     private BedrockConfig.Credentials resolveCredentials(ChatOptions options) {

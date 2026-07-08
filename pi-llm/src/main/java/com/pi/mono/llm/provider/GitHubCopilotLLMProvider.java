@@ -21,11 +21,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,16 +41,21 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
     private static final Pattern PROXY_ENDPOINT = Pattern.compile("proxy-ep=([^;]+)");
     private static final String DEFAULT_BASE_URL = "https://api.individual.githubcopilot.com";
     private static final String NO_TOOL_OUTPUT = "(no tool output)";
+    private static final String COPILOT_OAUTH_CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
     private final GitHubCopilotConfig config;
     private final GitHubCopilotOAuthClient.AccessTokenStore tokenStore;
     private final CopilotChatTransport chatTransport;
+    private final CopilotTokenRefresher tokenRefresher;
+    private final Clock clock;
 
     public GitHubCopilotLLMProvider(GitHubCopilotConfig config) {
         this(
             config,
             new GitHubCopilotCredentialStore(config.getResolvedCredentialsFile()),
-            new WebClientCopilotChatTransport(WebClient.builder().build())
+            new WebClientCopilotChatTransport(WebClient.builder().build()),
+            new OAuthClientCopilotTokenRefresher(new GitHubCopilotOAuthClient(COPILOT_OAUTH_CLIENT_ID)),
+            Clock.systemUTC()
         );
     }
 
@@ -56,9 +64,23 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
         GitHubCopilotOAuthClient.AccessTokenStore tokenStore,
         CopilotChatTransport chatTransport
     ) {
+        this(config, tokenStore, chatTransport, token -> {
+            throw new IllegalStateException("GitHub Copilot token refresh is not configured.");
+        }, Clock.systemUTC());
+    }
+
+    GitHubCopilotLLMProvider(
+        GitHubCopilotConfig config,
+        GitHubCopilotOAuthClient.AccessTokenStore tokenStore,
+        CopilotChatTransport chatTransport,
+        CopilotTokenRefresher tokenRefresher,
+        Clock clock
+    ) {
         this.config = config;
-        this.tokenStore = tokenStore;
+        this.tokenStore = Objects.requireNonNull(tokenStore, "tokenStore");
         this.chatTransport = Objects.requireNonNull(chatTransport, "chatTransport");
+        this.tokenRefresher = Objects.requireNonNull(tokenRefresher, "tokenRefresher");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -67,6 +89,7 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             GitHubCopilotOAuthClient.AccessToken token = tokenStore.load()
                 .filter(accessToken -> !accessToken.accessToken().isBlank())
                 .orElseThrow(() -> new IllegalStateException("GitHub Copilot credentials are not available."));
+            token = refreshIfExpired(token);
             ChatOptions options = request.options();
             String model = resolveModel(options);
             double temperature = options == null ? 0.7 : options.temperature();
@@ -146,6 +169,49 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             return options.model().trim();
         }
         return config.getResolvedModel();
+    }
+
+    private GitHubCopilotOAuthClient.AccessToken refreshIfExpired(GitHubCopilotOAuthClient.AccessToken token) {
+        if (!isExpired(token)) {
+            return token;
+        }
+        String refreshToken = textValue(token.rawResponse().get("refresh_token"));
+        if (refreshToken.isBlank()) {
+            throw new IllegalStateException("GitHub Copilot refresh token is not available.");
+        }
+        GitHubCopilotOAuthClient.AccessToken refreshed = tokenRefresher.refresh(new GitHubCopilotOAuthClient.AccessToken(
+            refreshToken,
+            token.tokenType(),
+            token.scope(),
+            Map.of("access_token", refreshToken)
+        ));
+        tokenStore.save(refreshed);
+        return refreshed;
+    }
+
+    private boolean isExpired(GitHubCopilotOAuthClient.AccessToken token) {
+        return expiresAt(token)
+            .map(expiresAt -> !expiresAt.isAfter(clock.instant()))
+            .orElse(false);
+    }
+
+    private Optional<Instant> expiresAt(GitHubCopilotOAuthClient.AccessToken token) {
+        Object value = token.rawResponse().get("expires_at");
+        if (value == null) {
+            return Optional.empty();
+        }
+        try {
+            long epochSeconds = value instanceof Number number
+                ? number.longValue()
+                : Long.parseLong(String.valueOf(value).trim());
+            return epochSeconds > 0 ? Optional.of(Instant.ofEpochSecond(epochSeconds)) : Optional.empty();
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    private String textValue(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     private Map<String, Object> toCopilotMessage(AgentMessage message) {
@@ -268,6 +334,25 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             List<Map<String, Object>> tools,
             Map<String, String> headers
         );
+    }
+
+    interface CopilotTokenRefresher {
+        GitHubCopilotOAuthClient.AccessToken refresh(GitHubCopilotOAuthClient.AccessToken githubAccessToken);
+    }
+
+    static class OAuthClientCopilotTokenRefresher implements CopilotTokenRefresher {
+        private final GitHubCopilotOAuthClient oauthClient;
+
+        OAuthClientCopilotTokenRefresher(GitHubCopilotOAuthClient oauthClient) {
+            this.oauthClient = Objects.requireNonNull(oauthClient, "oauthClient");
+        }
+
+        @Override
+        public GitHubCopilotOAuthClient.AccessToken refresh(
+            GitHubCopilotOAuthClient.AccessToken githubAccessToken
+        ) {
+            return oauthClient.refreshCopilotAccessToken(githubAccessToken);
+        }
     }
 
     static class WebClientCopilotChatTransport implements CopilotChatTransport {

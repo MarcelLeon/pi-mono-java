@@ -16,6 +16,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -111,6 +114,56 @@ class GitHubCopilotLLMProviderTest {
         assertEquals("conversation-edits", transport.requests.get(0).headers().get("Openai-Intent"));
     }
 
+    @Test
+    void refreshesExpiredCopilotApiTokenBeforeChatAndPersistsReplacement() {
+        Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
+        String expiredToken = "tid=old;exp=1;proxy-ep=proxy.old.githubcopilot.com;";
+        String refreshedToken = "tid=new;exp=999;proxy-ep=proxy.individual.githubcopilot.com;";
+        saveToken(
+            credentialsFile,
+            expiredToken,
+            Map.of(
+                "access_token", expiredToken,
+                "refresh_token", "github-refresh-token",
+                "expires_at", 10L
+            )
+        );
+        FakeCopilotChatTransport transport = new FakeCopilotChatTransport();
+        transport.response = """
+            {"choices":[{"message":{"content":"refreshed ok"},"finish_reason":"stop"}]}
+            """;
+        FakeCopilotTokenRefresher refresher = new FakeCopilotTokenRefresher(new GitHubCopilotOAuthClient.AccessToken(
+            refreshedToken,
+            "bearer",
+            "read:user",
+            Map.of(
+                "access_token", refreshedToken,
+                "refresh_token", "github-refresh-token",
+                "expires_at", 9999999999L
+            )
+        ));
+        GitHubCopilotCredentialStore store = new GitHubCopilotCredentialStore(credentialsFile);
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            enabledConfig(credentialsFile),
+            store,
+            transport,
+            refresher,
+            Clock.fixed(Instant.ofEpochSecond(11), ZoneOffset.UTC)
+        );
+
+        AgentMessage response = provider.chat(new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions("github-copilot", 0.2, 1024)
+        )).join();
+
+        assertEquals("refreshed ok", response.content());
+        assertEquals(List.of("github-refresh-token"), refresher.githubAccessTokens);
+        assertEquals("https://api.individual.githubcopilot.com", transport.requests.get(0).baseUrl());
+        assertEquals(refreshedToken, transport.requests.get(0).accessToken());
+        assertEquals(refreshedToken, store.load().orElseThrow().accessToken());
+    }
+
     private GitHubCopilotConfig enabledConfig(Path credentialsFile) {
         GitHubCopilotConfig config = new GitHubCopilotConfig();
         config.setEnabled(true);
@@ -169,6 +222,23 @@ class GitHubCopilotLLMProviderTest {
             List<Map<String, Object>> tools,
             Map<String, String> headers
         ) {
+        }
+    }
+
+    static class FakeCopilotTokenRefresher implements GitHubCopilotLLMProvider.CopilotTokenRefresher {
+        private final GitHubCopilotOAuthClient.AccessToken refreshedToken;
+        private final List<String> githubAccessTokens = new ArrayList<>();
+
+        FakeCopilotTokenRefresher(GitHubCopilotOAuthClient.AccessToken refreshedToken) {
+            this.refreshedToken = refreshedToken;
+        }
+
+        @Override
+        public GitHubCopilotOAuthClient.AccessToken refresh(
+            GitHubCopilotOAuthClient.AccessToken githubAccessToken
+        ) {
+            githubAccessTokens.add(githubAccessToken.accessToken());
+            return refreshedToken;
         }
     }
 

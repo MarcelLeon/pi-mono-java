@@ -1,6 +1,7 @@
 package com.pi.mono.llm.oauth;
 
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -18,6 +19,10 @@ import java.util.Optional;
 public class GitHubCopilotOAuthClient {
 
     private static final String DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+    private static final String COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
+    private static final String COPILOT_EDITOR_VERSION = "vscode/1.107.0";
+    private static final String COPILOT_PLUGIN_VERSION = "copilot-chat/0.35.0";
+    private static final String COPILOT_INTEGRATION_ID = "vscode-chat";
 
     private final String clientId;
     private final String scope;
@@ -62,14 +67,37 @@ public class GitHubCopilotOAuthClient {
 
     public LoginResult login() throws InterruptedException {
         DeviceAuthorization deviceAuthorization = startDeviceAuthorization();
-        AccessToken accessToken = poller.poll(new OAuthDeviceCodePoller.PollOptions<>(
+        AccessToken githubAccessToken = poller.poll(new OAuthDeviceCodePoller.PollOptions<>(
             deviceAuthorization.intervalSeconds(),
             deviceAuthorization.expiresInSeconds(),
             true,
             () -> pollAccessToken(deviceAuthorization)
         ));
+        AccessToken accessToken = refreshCopilotAccessToken(githubAccessToken);
         accessTokenStore.save(accessToken);
         return new LoginResult(deviceAuthorization, accessToken);
+    }
+
+    public AccessToken refreshCopilotAccessToken(AccessToken githubAccessToken) {
+        Objects.requireNonNull(githubAccessToken, "githubAccessToken");
+        if (githubAccessToken.accessToken().isBlank()) {
+            throw new IllegalArgumentException("githubAccessToken must not be blank");
+        }
+        Map<String, Object> response = transport.refreshCopilotToken(
+            urls.copilotTokenUrl(),
+            githubAccessToken.accessToken()
+        );
+        String token = text(response, "token");
+        Map<String, Object> raw = new LinkedHashMap<>(response);
+        raw.put("refresh_token", githubAccessToken.accessToken());
+        raw.put("token_type", githubAccessToken.tokenType());
+        raw.put("scope", githubAccessToken.scope());
+        return new AccessToken(
+            token,
+            githubAccessToken.tokenType().isBlank() ? "bearer" : githubAccessToken.tokenType(),
+            githubAccessToken.scope(),
+            raw
+        );
     }
 
     private DeviceAuthorization startDeviceAuthorization() {
@@ -179,6 +207,10 @@ public class GitHubCopilotOAuthClient {
     @FunctionalInterface
     public interface Transport {
         Map<String, Object> postForm(String url, Map<String, String> form);
+
+        default Map<String, Object> refreshCopilotToken(String url, String githubAccessToken) {
+            throw new UnsupportedOperationException("GitHub Copilot token refresh is not supported by this transport");
+        }
     }
 
     public interface AccessTokenStore {
@@ -201,15 +233,17 @@ public class GitHubCopilotOAuthClient {
         }
     }
 
-    public record Urls(String deviceCodeUrl, String accessTokenUrl) {
+    public record Urls(String deviceCodeUrl, String accessTokenUrl, String copilotTokenUrl) {
         public static final Urls DEFAULT = new Urls(
             "https://github.com/login/device/code",
-            "https://github.com/login/oauth/access_token"
+            "https://github.com/login/oauth/access_token",
+            "https://api.github.com/copilot_internal/v2/token"
         );
 
         public Urls {
             requireText(deviceCodeUrl, "deviceCodeUrl");
             requireText(accessTokenUrl, "accessTokenUrl");
+            requireText(copilotTokenUrl, "copilotTokenUrl");
         }
     }
 
@@ -249,6 +283,22 @@ public class GitHubCopilotOAuthClient {
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .accept(MediaType.APPLICATION_JSON)
                 .body(BodyInserters.fromFormData(body))
+                .retrieve()
+                .bodyToMono(MAP_TYPE)
+                .block();
+            return response == null ? Map.of() : response;
+        }
+
+        @Override
+        public Map<String, Object> refreshCopilotToken(String url, String githubAccessToken) {
+            Map<String, Object> response = webClient.get()
+                .uri(url)
+                .accept(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + githubAccessToken)
+                .header(HttpHeaders.USER_AGENT, COPILOT_USER_AGENT)
+                .header("Editor-Version", COPILOT_EDITOR_VERSION)
+                .header("Editor-Plugin-Version", COPILOT_PLUGIN_VERSION)
+                .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
                 .retrieve()
                 .bodyToMono(MAP_TYPE)
                 .block();

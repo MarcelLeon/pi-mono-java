@@ -16,12 +16,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -73,19 +72,43 @@ class GitHubCopilotLLMProviderTest {
     }
 
     @Test
-    void chatFailsExplicitlyUntilCopilotTransportIsImplemented() {
+    void sendsChatRequestThroughCredentialBackedCopilotTransport() {
         Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
-        saveToken(credentialsFile);
-        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(enabledConfig(credentialsFile));
+        saveToken(
+            credentialsFile,
+            "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;",
+            Map.of("access_token", "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;")
+        );
+        FakeCopilotChatTransport transport = new FakeCopilotChatTransport();
+        transport.response = """
+            {"choices":[{"message":{"content":"copilot ok"},"finish_reason":"stop"}],
+             "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+            """;
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            enabledConfig(credentialsFile),
+            new GitHubCopilotCredentialStore(credentialsFile),
+            transport
+        );
         ChatRequest request = new ChatRequest(
             "session-1",
             List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
             new ChatOptions("github-copilot", 0.2, 1024)
         );
 
-        CompletionException error = assertThrows(CompletionException.class, () -> provider.chat(request).join());
+        AgentMessage response = provider.chat(request).join();
 
-        assertTrue(error.getCause().getMessage().contains("not implemented"));
+        assertEquals(MessageRole.ASSISTANT, response.role());
+        assertEquals("copilot ok", response.content());
+        assertEquals("stop", response.metadata().get("finishReason"));
+        assertEquals(Map.of("inputTokens", 3L, "outputTokens", 2L, "totalTokens", 5L), response.metadata().get("usage"));
+        assertEquals("https://api.individual.githubcopilot.com", transport.requests.get(0).baseUrl());
+        assertEquals("tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;", transport.requests.get(0).accessToken());
+        assertEquals("github-copilot", transport.requests.get(0).model());
+        assertEquals(0.2, transport.requests.get(0).temperature());
+        assertEquals(1024, transport.requests.get(0).maxTokens());
+        assertEquals(List.of(Map.of("role", "user", "content", "hello")), transport.requests.get(0).messages());
+        assertEquals("user", transport.requests.get(0).headers().get("X-Initiator"));
+        assertEquals("conversation-edits", transport.requests.get(0).headers().get("Openai-Intent"));
     }
 
     private GitHubCopilotConfig enabledConfig(Path credentialsFile) {
@@ -96,12 +119,57 @@ class GitHubCopilotLLMProviderTest {
     }
 
     private void saveToken(Path credentialsFile) {
+        saveToken(credentialsFile, "ghu_test_token", Map.of("access_token", "ghu_test_token"));
+    }
+
+    private void saveToken(Path credentialsFile, String accessToken, Map<String, Object> rawResponse) {
         new GitHubCopilotCredentialStore(credentialsFile).save(new GitHubCopilotOAuthClient.AccessToken(
-            "ghu_test_token",
+            accessToken,
             "bearer",
             "read:user",
-            Map.of("access_token", "ghu_test_token")
+            rawResponse
         ));
+    }
+
+    static class FakeCopilotChatTransport implements GitHubCopilotLLMProvider.CopilotChatTransport {
+        private final List<Request> requests = new ArrayList<>();
+        private String response;
+
+        @Override
+        public String chat(
+            String baseUrl,
+            String accessToken,
+            String model,
+            List<Map<String, Object>> messages,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            Map<String, String> headers
+        ) {
+            requests.add(new Request(
+                baseUrl,
+                accessToken,
+                model,
+                messages,
+                temperature,
+                maxTokens,
+                tools,
+                headers
+            ));
+            return response;
+        }
+
+        record Request(
+            String baseUrl,
+            String accessToken,
+            String model,
+            List<Map<String, Object>> messages,
+            double temperature,
+            int maxTokens,
+            List<Map<String, Object>> tools,
+            Map<String, String> headers
+        ) {
+        }
     }
 
     static class TestProvider implements LLMProvider {

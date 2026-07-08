@@ -331,6 +331,59 @@ class OpenAILLMProviderTest {
     }
 
     @Test
+    void chatSerializesAssistantToolCallsForContinuationRequests() throws Exception {
+        OpenAIConfig config = new OpenAIConfig();
+        config.setApiKey("configured-key");
+        StubOpenAIClient client = new StubOpenAIClient(config, """
+            {
+              "choices": [
+                {
+                  "message": {"content": "done"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            """);
+        OpenAILLMProvider provider = new OpenAILLMProvider(client, config);
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(
+                new AgentMessage(MessageRole.USER, "weather?", Map.of()),
+                new AgentMessage(MessageRole.ASSISTANT, "", Map.of(
+                    "toolCalls", List.of(Map.of(
+                        "id", "call_weather_1",
+                        "name", "weather",
+                        "arguments", Map.of("city", "Shanghai")
+                    ))
+                )),
+                new AgentMessage(
+                    MessageRole.TOOL_RESULT,
+                    "Sunny",
+                    Map.of("toolCallId", "call_weather_1")
+                )
+            ),
+            new ChatOptions("gpt-5.5", 0.2, 1024)
+        );
+
+        provider.chat(request).get();
+
+        Map<String, Object> assistantMessage = client.lastRichMessages.get(1);
+        assertEquals("assistant", assistantMessage.get("role"));
+        assertEquals("", assistantMessage.get("content"));
+        Object toolCallsValue = assistantMessage.get("tool_calls");
+        assertTrue(toolCallsValue instanceof List<?>);
+        List<?> toolCalls = (List<?>) toolCallsValue;
+        assertEquals(1, toolCalls.size());
+        Map<?, ?> toolCall = (Map<?, ?>) toolCalls.get(0);
+        assertEquals("call_weather_1", toolCall.get("id"));
+        assertEquals("function", toolCall.get("type"));
+        assertEquals(Map.of(
+            "name", "weather",
+            "arguments", "{\"city\":\"Shanghai\"}"
+        ), toolCall.get("function"));
+    }
+
+    @Test
     void chatConvertsImageAttachmentsToOpenAIContentParts() throws Exception {
         OpenAIConfig config = new OpenAIConfig();
         config.setApiKey("configured-key");

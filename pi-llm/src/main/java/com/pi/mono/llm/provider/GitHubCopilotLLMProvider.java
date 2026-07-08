@@ -280,8 +280,53 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
             if (toolCallId != null) {
                 payload.put("tool_call_id", String.valueOf(toolCallId));
             }
+        } else if (message.role() == MessageRole.ASSISTANT) {
+            List<Map<String, Object>> toolCalls = toOpenAIToolCalls(message.metadata().get("toolCalls"));
+            if (!toolCalls.isEmpty()) {
+                payload.put("tool_calls", toolCalls);
+            }
         }
         return Map.copyOf(payload);
+    }
+
+    private List<Map<String, Object>> toOpenAIToolCalls(Object rawToolCalls) {
+        if (!(rawToolCalls instanceof List<?> rawList)) {
+            return List.of();
+        }
+        List<Map<String, Object>> toolCalls = new java.util.ArrayList<>();
+        for (Object rawToolCall : rawList) {
+            if (!(rawToolCall instanceof Map<?, ?> toolCallMap)) {
+                continue;
+            }
+            String id = textValue(toolCallMap.get("id"));
+            String name = textValue(toolCallMap.get("name"));
+            if (id.isBlank() || name.isBlank()) {
+                continue;
+            }
+            toolCalls.add(Map.of(
+                "id", id,
+                "type", "function",
+                "function", Map.of(
+                    "name", name,
+                    "arguments", toolArgumentsJson(toolCallMap.get("arguments"))
+                )
+            ));
+        }
+        return List.copyOf(toolCalls);
+    }
+
+    private String toolArgumentsJson(Object arguments) {
+        if (arguments == null) {
+            return "{}";
+        }
+        if (arguments instanceof String argumentsJson) {
+            return argumentsJson;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(arguments);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
     private String toOpenAIRole(MessageRole role) {

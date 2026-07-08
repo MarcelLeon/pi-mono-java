@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.util.HashMap;
 import java.util.List;
@@ -151,6 +152,7 @@ public class AnthropicClient {
                     .flatMap(errorBody -> Mono.error(toAnthropicException(clientResponse.statusCode(), errorBody)));
             })
             .bodyToMono(String.class)
+            .retryWhen(Retry.max(1).filter(AnthropicClient::isRetryableProviderError))
             .doOnSuccess(response -> log.debug("Received Anthropic message response"))
             .doOnError(error -> log.error("Anthropic message request failed", error));
     }
@@ -161,7 +163,26 @@ public class AnthropicClient {
     }
 
     private static AnthropicException toAnthropicException(HttpStatusCode statusCode, String responseBody) {
-        return new AnthropicException(formatHttpErrorMessage(statusCode, responseBody));
+        String message = formatHttpErrorMessage(statusCode, responseBody);
+        if (isRetryInstruction(responseBody)) {
+            return new RetryableAnthropicException(message);
+        }
+        return new AnthropicException(message);
+    }
+
+    private static boolean isRetryableProviderError(Throwable error) {
+        return error instanceof RetryableAnthropicException;
+    }
+
+    static boolean isRetryInstruction(String responseBody) {
+        if (responseBody == null) {
+            return false;
+        }
+        String normalizedBody = responseBody.toLowerCase();
+        return normalizedBody.contains("please retry")
+            || normalizedBody.contains("retry the request")
+            || normalizedBody.contains("try again")
+            || normalizedBody.contains("temporarily unavailable");
     }
 
     private boolean supportsAdaptiveThinking(String model) {
@@ -219,6 +240,12 @@ public class AnthropicClient {
 
     public static class AnthropicException extends RuntimeException {
         public AnthropicException(String message) {
+            super(message);
+        }
+    }
+
+    private static class RetryableAnthropicException extends AnthropicException {
+        RetryableAnthropicException(String message) {
             super(message);
         }
     }

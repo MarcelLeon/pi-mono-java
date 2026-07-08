@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -190,6 +191,7 @@ public class BedrockClient {
                     .flatMap(errorBody -> Mono.error(toBedrockException(clientResponse.statusCode(), errorBody)));
             })
             .bodyToMono(String.class)
+            .retryWhen(Retry.max(1).filter(BedrockClient::isRetryableProviderError))
             .doOnSuccess(response -> log.debug("Received Bedrock message response"))
             .doOnError(error -> log.error("Bedrock message request failed", error));
     }
@@ -254,7 +256,26 @@ public class BedrockClient {
     }
 
     private static BedrockException toBedrockException(HttpStatusCode statusCode, String responseBody) {
-        return new BedrockException(formatHttpErrorMessage(statusCode, responseBody));
+        String message = formatHttpErrorMessage(statusCode, responseBody);
+        if (isRetryInstruction(responseBody)) {
+            return new RetryableBedrockException(message);
+        }
+        return new BedrockException(message);
+    }
+
+    private static boolean isRetryableProviderError(Throwable error) {
+        return error instanceof RetryableBedrockException;
+    }
+
+    static boolean isRetryInstruction(String responseBody) {
+        if (responseBody == null) {
+            return false;
+        }
+        String normalizedBody = responseBody.toLowerCase();
+        return normalizedBody.contains("please retry")
+            || normalizedBody.contains("retry the request")
+            || normalizedBody.contains("try again")
+            || normalizedBody.contains("temporarily unavailable");
     }
 
     private Map<String, String> signingHeaders(
@@ -365,6 +386,12 @@ public class BedrockClient {
 
     public static class BedrockException extends RuntimeException {
         public BedrockException(String message) {
+            super(message);
+        }
+    }
+
+    private static class RetryableBedrockException extends BedrockException {
+        RetryableBedrockException(String message) {
             super(message);
         }
     }

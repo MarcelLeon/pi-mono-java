@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -422,6 +423,37 @@ class BedrockClientTest {
             "Bedrock API error: 403 FORBIDDEN, response body: {\"message\":\"signature mismatch\"}",
             error.getMessage()
         );
+    }
+
+    @Test
+    void retriesProviderErrorsWhenResponseBodyAsksCallerToRetry() {
+        AtomicInteger attempts = new AtomicInteger();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                if (attempts.incrementAndGet() == 1) {
+                    return Mono.just(ClientResponse.create(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"message\":\"provider stream failed, please retry the request\"}")
+                        .build());
+                }
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok after retry\"}]}")
+                    .build());
+            })
+            .build();
+        BedrockClient client = new BedrockClient(testConfig(), webClient);
+
+        String response = client.createMessage(
+            "anthropic.claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            "",
+            0.7,
+            1000
+        ).block();
+
+        assertEquals(2, attempts.get());
+        assertEquals("{\"content\":[{\"type\":\"text\",\"text\":\"ok after retry\"}]}", response);
     }
 
     private BedrockConfig testConfig() {

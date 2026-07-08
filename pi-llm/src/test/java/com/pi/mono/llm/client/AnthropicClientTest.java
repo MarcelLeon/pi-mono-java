@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -120,6 +121,37 @@ class AnthropicClientTest {
             "Anthropic API error: 400 BAD_REQUEST, response body: {\"error\":{\"message\":\"bad anthropic request\"}}",
             error.getMessage()
         );
+    }
+
+    @Test
+    void retriesProviderErrorsWhenResponseBodyAsksCallerToRetry() {
+        AtomicInteger attempts = new AtomicInteger();
+        WebClient webClient = WebClient.builder()
+            .exchangeFunction(request -> {
+                if (attempts.incrementAndGet() == 1) {
+                    return Mono.just(ClientResponse.create(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"error\":{\"message\":\"provider stream failed, please retry the request\"}}")
+                        .build());
+                }
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"content\":[{\"type\":\"text\",\"text\":\"ok after retry\"}]}")
+                    .build());
+            })
+            .build();
+        AnthropicClient client = new AnthropicClient(testConfig(), webClient);
+
+        String response = client.createMessage(
+            "claude-sonnet-5",
+            List.of(Map.of("role", "user", "content", "hello")),
+            "",
+            0.7,
+            1000
+        ).block();
+
+        assertEquals(2, attempts.get());
+        assertEquals("{\"content\":[{\"type\":\"text\",\"text\":\"ok after retry\"}]}", response);
     }
 
     @Test

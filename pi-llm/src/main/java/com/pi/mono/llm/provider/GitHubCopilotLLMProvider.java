@@ -15,6 +15,7 @@ import com.pi.mono.core.ToolCallResult;
 import com.pi.mono.llm.config.GitHubCopilotConfig;
 import com.pi.mono.llm.oauth.GitHubCopilotCredentialStore;
 import com.pi.mono.llm.oauth.GitHubCopilotOAuthClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -49,14 +50,24 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
     private final CopilotChatTransport chatTransport;
     private final CopilotTokenRefresher tokenRefresher;
     private final Clock clock;
+    private final List<ProviderHeaderContributor> headerContributors;
 
     public GitHubCopilotLLMProvider(GitHubCopilotConfig config) {
+        this(config, List.of());
+    }
+
+    @Autowired
+    public GitHubCopilotLLMProvider(
+        GitHubCopilotConfig config,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
         this(
             config,
             new GitHubCopilotCredentialStore(config.getResolvedCredentialsFile()),
             new WebClientCopilotChatTransport(WebClient.builder().build()),
             new OAuthClientCopilotTokenRefresher(new GitHubCopilotOAuthClient(COPILOT_OAUTH_CLIENT_ID)),
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            headerContributors
         );
     }
 
@@ -67,7 +78,18 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
     ) {
         this(config, tokenStore, chatTransport, token -> {
             throw new IllegalStateException("GitHub Copilot token refresh is not configured.");
-        }, Clock.systemUTC());
+        }, Clock.systemUTC(), List.of());
+    }
+
+    GitHubCopilotLLMProvider(
+        GitHubCopilotConfig config,
+        GitHubCopilotOAuthClient.AccessTokenStore tokenStore,
+        CopilotChatTransport chatTransport,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
+        this(config, tokenStore, chatTransport, token -> {
+            throw new IllegalStateException("GitHub Copilot token refresh is not configured.");
+        }, Clock.systemUTC(), headerContributors);
     }
 
     GitHubCopilotLLMProvider(
@@ -77,11 +99,23 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
         CopilotTokenRefresher tokenRefresher,
         Clock clock
     ) {
+        this(config, tokenStore, chatTransport, tokenRefresher, clock, List.of());
+    }
+
+    GitHubCopilotLLMProvider(
+        GitHubCopilotConfig config,
+        GitHubCopilotOAuthClient.AccessTokenStore tokenStore,
+        CopilotChatTransport chatTransport,
+        CopilotTokenRefresher tokenRefresher,
+        Clock clock,
+        List<ProviderHeaderContributor> headerContributors
+    ) {
         this.config = config;
         this.tokenStore = Objects.requireNonNull(tokenStore, "tokenStore");
         this.chatTransport = Objects.requireNonNull(chatTransport, "chatTransport");
         this.tokenRefresher = Objects.requireNonNull(tokenRefresher, "tokenRefresher");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.headerContributors = headerContributors == null ? List.of() : List.copyOf(headerContributors);
     }
 
     @Override
@@ -107,7 +141,7 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
                 temperature,
                 maxTokens,
                 tools,
-                headers(request, options)
+                headers(request, model, options)
             );
             return CompletableFuture.completedFuture(parseChatCompletion(response));
         } catch (Exception e) {
@@ -342,12 +376,18 @@ public class GitHubCopilotLLMProvider implements LLMProvider {
         return content == null || content.isBlank() ? NO_TOOL_OUTPUT : content;
     }
 
-    private Map<String, String> headers(ChatRequest request, ChatOptions options) {
+    private Map<String, String> headers(ChatRequest request, String model, ChatOptions options) {
         Map<String, String> headers = new HashMap<>();
         headers.put("X-Initiator", initiator(request.messages()));
         headers.put("Openai-Intent", "conversation-edits");
         if (hasImageInput(request.messages())) {
             headers.put("Copilot-Vision-Request", "true");
+        }
+        for (ProviderHeaderContributor contributor : headerContributors) {
+            Map<String, String> contributed = contributor.contributeHeaders(request, getId(), model);
+            if (contributed != null) {
+                headers.putAll(contributed);
+            }
         }
         if (options != null) {
             headers.putAll(options.headers());

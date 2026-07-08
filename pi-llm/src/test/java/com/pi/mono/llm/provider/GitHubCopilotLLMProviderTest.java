@@ -150,6 +150,57 @@ class GitHubCopilotLLMProviderTest {
     }
 
     @Test
+    void mergesProviderHeaderContributorsBeforeCopilotChatRequests() {
+        Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
+        saveToken(
+            credentialsFile,
+            "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;",
+            Map.of("access_token", "tid=1;exp=999;proxy-ep=proxy.individual.githubcopilot.com;")
+        );
+        ProviderHeaderContributor contributor = (request, providerId, model) -> Map.of(
+            "X-Provider-Id", providerId,
+            "X-Model-Id", model,
+            "X-Session-Id", request.sessionId(),
+            "X-Shared", "contributor"
+        );
+        FakeCopilotChatTransport transport = new FakeCopilotChatTransport();
+        transport.response = """
+            {"choices":[{"message":{"content":"headers ok"},"finish_reason":"stop"}]}
+            """;
+        GitHubCopilotLLMProvider provider = new GitHubCopilotLLMProvider(
+            enabledConfig(credentialsFile),
+            new GitHubCopilotCredentialStore(credentialsFile),
+            transport,
+            List.of(contributor)
+        );
+        ChatRequest request = new ChatRequest(
+            "session-1",
+            List.of(new AgentMessage(MessageRole.USER, "hello", Map.of())),
+            new ChatOptions(
+                "gpt-5.5-copilot",
+                0.2,
+                1024,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("X-Request-Id", "request-1", "X-Shared", "request")
+            )
+        );
+
+        provider.chat(request).join();
+
+        assertEquals(Map.of(
+            "X-Initiator", "user",
+            "Openai-Intent", "conversation-edits",
+            "X-Provider-Id", "github-copilot",
+            "X-Model-Id", "gpt-5.5-copilot",
+            "X-Session-Id", "session-1",
+            "X-Request-Id", "request-1",
+            "X-Shared", "request"
+        ), transport.requests.get(0).headers());
+    }
+
+    @Test
     void parsesCopilotToolCallsIntoUnifiedMetadata() {
         Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
         saveToken(

@@ -10,6 +10,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Minimal GitHub Copilot-compatible OAuth device flow client.
@@ -23,6 +24,7 @@ public class GitHubCopilotOAuthClient {
     private final Urls urls;
     private final Transport transport;
     private final OAuthDeviceCodePoller<AccessToken> poller;
+    private final AccessTokenStore accessTokenStore;
 
     public GitHubCopilotOAuthClient(String clientId) {
         this(clientId, "read:user");
@@ -39,11 +41,23 @@ public class GitHubCopilotOAuthClient {
         Transport transport,
         OAuthDeviceCodePoller<AccessToken> poller
     ) {
+        this(clientId, scope, urls, transport, poller, AccessTokenStore.noop());
+    }
+
+    GitHubCopilotOAuthClient(
+        String clientId,
+        String scope,
+        Urls urls,
+        Transport transport,
+        OAuthDeviceCodePoller<AccessToken> poller,
+        AccessTokenStore accessTokenStore
+    ) {
         this.clientId = requireText(clientId, "clientId");
         this.scope = scope == null ? "" : scope.trim();
         this.urls = Objects.requireNonNull(urls, "urls");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.poller = Objects.requireNonNull(poller, "poller");
+        this.accessTokenStore = Objects.requireNonNull(accessTokenStore, "accessTokenStore");
     }
 
     public LoginResult login() throws InterruptedException {
@@ -54,6 +68,7 @@ public class GitHubCopilotOAuthClient {
             true,
             () -> pollAccessToken(deviceAuthorization)
         ));
+        accessTokenStore.save(accessToken);
         return new LoginResult(deviceAuthorization, accessToken);
     }
 
@@ -164,6 +179,26 @@ public class GitHubCopilotOAuthClient {
     @FunctionalInterface
     public interface Transport {
         Map<String, Object> postForm(String url, Map<String, String> form);
+    }
+
+    public interface AccessTokenStore {
+        void save(AccessToken accessToken);
+
+        Optional<AccessToken> load();
+
+        static AccessTokenStore noop() {
+            return new AccessTokenStore() {
+                @Override
+                public void save(AccessToken accessToken) {
+                    // No persistence by default.
+                }
+
+                @Override
+                public Optional<AccessToken> load() {
+                    return Optional.empty();
+                }
+            };
+        }
     }
 
     public record Urls(String deviceCodeUrl, String accessTokenUrl) {

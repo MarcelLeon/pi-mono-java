@@ -1,7 +1,13 @@
 package com.pi.mono.llm.oauth;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -13,8 +19,14 @@ import java.util.Map;
 import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GitHubCopilotOAuthClientTest {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void startsDeviceFlowAndWaitsBeforePollingForAccessToken() throws Exception {
@@ -91,6 +103,51 @@ class GitHubCopilotOAuthClientTest {
         assertEquals(List.of(0L, 5000L, 10000L, 17000L), transport.requests.stream()
             .map(FakeTransport.Request::timeMs)
             .toList());
+    }
+
+    @Test
+    void persistsSuccessfulAccessTokenToCredentialStore() throws Exception {
+        MutableClock clock = new MutableClock();
+        RecordingSleeper sleeper = new RecordingSleeper(clock);
+        FakeTransport transport = new FakeTransport(clock);
+        transport.deviceResponses.add(Map.of(
+            "device_code", "device-123",
+            "user_code", "ABCD-EFGH",
+            "verification_uri", "https://github.com/login/device",
+            "expires_in", 900,
+            "interval", 5
+        ));
+        transport.tokenResponses.add(Map.of(
+            "access_token", "ghu_persisted_token",
+            "token_type", "bearer",
+            "scope", "read:user",
+            "refresh_token", "refresh-1"
+        ));
+        OAuthDeviceCodePoller<GitHubCopilotOAuthClient.AccessToken> poller =
+            new OAuthDeviceCodePoller<>(clock, sleeper);
+        Path credentialsFile = tempDir.resolve("github-copilot-auth.json");
+        GitHubCopilotCredentialStore credentialStore = new GitHubCopilotCredentialStore(credentialsFile);
+        GitHubCopilotOAuthClient client = new GitHubCopilotOAuthClient(
+            "test-client",
+            "read:user",
+            GitHubCopilotOAuthClient.Urls.DEFAULT,
+            transport,
+            poller,
+            credentialStore
+        );
+
+        GitHubCopilotOAuthClient.LoginResult result = client.login();
+
+        assertEquals("ghu_persisted_token", result.accessToken().accessToken());
+        assertTrue(Files.exists(credentialsFile));
+        GitHubCopilotOAuthClient.AccessToken loaded = credentialStore.load().orElseThrow();
+        assertEquals("ghu_persisted_token", loaded.accessToken());
+        assertEquals("bearer", loaded.tokenType());
+        assertEquals("read:user", loaded.scope());
+        assertEquals("refresh-1", loaded.rawResponse().get("refresh_token"));
+        JsonNode persisted = OBJECT_MAPPER.readTree(Files.readString(credentialsFile));
+        assertEquals("api_key", persisted.path("type").asText());
+        assertEquals("github-copilot", persisted.path("provider").asText());
     }
 
     static class FakeTransport implements GitHubCopilotOAuthClient.Transport {

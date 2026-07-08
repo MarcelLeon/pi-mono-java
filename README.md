@@ -44,11 +44,11 @@ Latest checked main branch also includes post-release coding-agent/AI fixes thro
 | Session tree + JSONL persistence | `packages/agent` session storage, reasoning usage metadata, invalid-session overwrite protection, `session_info_changed` notification, split-turn compaction summary serialization | `pi-session` (restore/resume/fork/import/export, nested usage/reasoning token metadata, invalid non-empty JSONL overwrite protection, deterministic startup session ids, rename metadata event source, bounded non-streaming tool result continuation, length-truncated assistant tool-call failure handling, serialized split-turn summary orchestration) | Mostly aligned for Java use |
 | Tool runtime | built-in `read/write/edit/bash/grep/find/ls`, BMP image handling | `pi-tools` (read/write/edit/bash/find/grep/ls, BMP-to-PNG payloads in `read`, literal `edit` replacements with extra replacement metadata tolerated, strict 1-60s bash timeout validation, sequential `executionMode` tool metadata, session-level multi-round tool-call execution into `TOOL_RESULT`) | Partially aligned |
 | CLI agent workflow | `packages/coding-agent` | `pi-cli` (`--no-session`, `--session-id`, `@file` attachment expansion, improved session/model/resource commands) | Partially aligned |
-| Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, trusted `.pi/settings.json` prompt/skill resource overrides, prompt expansion, basic `/skill:name`) | Partially aligned |
+| Context files, prompts, skills | `coding-agent` resource loader | `pi-cli` (`AGENTS.md`/`CLAUDE.md`, `.pi/prompts`, `.pi/skills`, `.agents/skills`, installed `.pi/packages/*/prompts` and `.pi/packages/*/skills`, trusted `.pi/settings.json` prompt/skill resource overrides, prompt expansion, basic `/skill:name`) | Partially aligned |
 | CLI settings | `settings.json` (`outputPad`, `externalEditor`) | `pi-cli` (`outputPad` for user/assistant/thinking lines, `/edit` via configured `externalEditor`) | Partially aligned |
 | Project trust | `coding-agent` trust manager | `pi-cli` (`/trust`, trust-aware local resource loading) | Partially aligned |
 | RPC session inspection | `rpc-entry`, `get_entries`, `get_tree`, entry renderers, tail-derived short entry ids | `pi-cli --rpc` JSONL (`get_entries`, `get_tree`, rendered entry summaries, `shortId` from full-id random tails) | Minimally aligned |
-| TUI / extension / package ecosystem | `packages/tui`, `coding-agent` extensions, themes, packages | documented gap | Not aligned yet |
+| TUI / extension / package ecosystem | `packages/tui`, `coding-agent` extensions, themes, packages | installed package prompt/skill file discovery only; executable extensions, themes, package install/update flows remain documented gaps | Not aligned yet |
 
 Detailed notes: [docs/capability-comparison.md](./docs/capability-comparison.md)
 
@@ -196,7 +196,7 @@ Quickstart docs:
 - [x] Serialize split-turn compaction summary requests so single-concurrency providers are not called concurrently
 - [x] Support deterministic startup session ids with `--session-id` and ephemeral runs with `--no-session`
 - [x] Reject overwriting non-empty invalid JSONL session files
-- [x] Discover context files, prompt templates, and skills in the CLI startup path
+- [x] Discover context files, prompt templates, skills, and installed package prompt/skill files in the CLI startup path
 - [x] Gate project-local prompt/skill resources behind a `/trust` decision
 - [x] Apply trusted `.pi/settings.json` prompt/skill resource overrides with `+`, `-`, and `!` patterns, including project-local deltas over inherited global resources
 - [x] Expand trusted prompt templates and inject basic `/skill:name` instructions into CLI conversations
@@ -254,7 +254,7 @@ Latest local verification sample:
 - `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (resource discovery tests).
 - `mvn -pl pi-cli -am test -Dtest=PiTrustManagerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (project trust tests).
 - `mvn -pl pi-cli -am test -Dtest=PiResourceCommandResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (prompt template and basic skill invocation tests).
-- `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (context discovery, trusted/untrusted local prompt/skill loading, and `.pi/settings.json` prompt/skill resource overrides over local and inherited global resources).
+- `mvn -pl pi-cli -am test -Dtest=PiResourceLoaderTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (context discovery, trusted/untrusted local prompt/skill loading, installed package prompt/skill discovery, and `.pi/settings.json` prompt/skill resource overrides over local and inherited global resources).
 - `mvn -pl pi-cli -am test -Dtest=PiFileReferenceResolverTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI `@file` attachment expansion, including BMP-to-PNG payloads).
 - `mvn -pl pi-cli -am test -Dtest=PiRpcCommandHandlerTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (minimal RPC `get_entries`/`get_tree` tests, including rendered entry summaries and tail-derived `shortId` fields).
 - `mvn -pl pi-cli -am test -Dtest=PiCliStartupOptionsTest,PiCliSettingsLoaderTest,PiCliOutputFormatterTest,PiExternalEditorTest -Dsurefire.failIfNoSpecifiedTests=false -Djava.version=17`: pass (CLI startup args, settings loading, user/assistant/thinking output padding, and external editor command runner tests).

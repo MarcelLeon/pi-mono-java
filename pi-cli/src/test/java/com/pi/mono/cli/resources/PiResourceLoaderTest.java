@@ -52,6 +52,25 @@ class PiResourceLoaderTest {
     }
 
     @Test
+    void discoversPromptTemplatesAndSkillsFromInstalledPackages() throws Exception {
+        Path project = Files.createDirectory(tempDir.resolve("project"));
+        Files.createDirectories(project.resolve(".pi/packages/acme/prompts"));
+        Files.createDirectories(project.resolve(".pi/packages/acme/skills/release"));
+        Files.writeString(project.resolve(".pi/packages/acme/prompts/triage.md"), "Triage this issue");
+        Files.writeString(project.resolve(".pi/packages/acme/skills/release/SKILL.md"), "# Release Skill");
+
+        PiResources resources = new PiResourceLoader(tempDir.resolve("home")).load(project);
+
+        assertEquals(1, resources.promptTemplates().size());
+        assertEquals("triage", resources.promptTemplates().get(0).name());
+        assertEquals(project.resolve(".pi/packages/acme/prompts/triage.md"), resources.promptTemplates().get(0).path());
+
+        assertEquals(1, resources.skills().size());
+        assertEquals("release", resources.skills().get(0).name());
+        assertEquals(project.resolve(".pi/packages/acme/skills/release/SKILL.md"), resources.skills().get(0).path());
+    }
+
+    @Test
     void untrustedProjectSkipsProjectLocalPromptsAndSkillsButLoadsGlobalSkills() throws Exception {
         Path userHome = Files.createDirectory(tempDir.resolve("home"));
         Files.createDirectories(userHome.resolve(".agents/skills/global"));

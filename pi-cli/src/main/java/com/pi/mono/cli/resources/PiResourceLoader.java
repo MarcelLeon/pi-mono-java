@@ -138,6 +138,7 @@ public class PiResourceLoader {
                 continue;
             }
             addPromptsFromDirectory(prompts, root.resolve(".pi/prompts"));
+            addPackagePrompts(prompts, root.resolve(".pi/packages"));
         }
         return prompts;
     }
@@ -164,6 +165,7 @@ public class PiResourceLoader {
             }
             addSkillsFromDirectory(skills, root.resolve(".pi/skills"));
             addSkillsFromDirectory(skills, root.resolve(".agents/skills"));
+            addPackageSkills(skills, root.resolve(".pi/packages"));
         }
         return skills;
     }
@@ -267,6 +269,42 @@ public class PiResourceLoader {
 
     private String slashPath(Path path) {
         return path.normalize().toString().replace('\\', '/');
+    }
+
+    private void addPackagePrompts(List<PiResources.ResourceFile> prompts, Path packagesDir) throws IOException {
+        if (!Files.isDirectory(packagesDir)) {
+            return;
+        }
+
+        try (Stream<Path> packages = Files.list(packagesDir)) {
+            packages.filter(Files::isDirectory)
+                .sorted()
+                .forEach(packageDir -> {
+                    try {
+                        addPromptsFromDirectory(prompts, packageDir.resolve("prompts"));
+                    } catch (IOException e) {
+                        throw new IllegalStateException("Failed to load package prompts from " + packageDir, e);
+                    }
+                });
+        }
+    }
+
+    private void addPackageSkills(List<PiResources.ResourceFile> skills, Path packagesDir) throws IOException {
+        if (!Files.isDirectory(packagesDir)) {
+            return;
+        }
+
+        try (Stream<Path> packages = Files.list(packagesDir)) {
+            packages.filter(Files::isDirectory)
+                .sorted()
+                .forEach(packageDir -> {
+                    try {
+                        addSkillsFromDirectory(skills, packageDir.resolve("skills"));
+                    } catch (IOException e) {
+                        throw new IllegalStateException("Failed to load package skills from " + packageDir, e);
+                    }
+                });
+        }
     }
 
     private void addSkillsFromDirectory(List<PiResources.ResourceFile> skills, Path skillsDir) throws IOException {
